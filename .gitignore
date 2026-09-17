@@ -1,0 +1,29 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/main
+/bin
+
+# Test binary
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# env
+.env
+.env.docker
+.env.local
+
+# tmp / editor
+/tmp
+*.log
+.DS_Store
+.idea/
+.vscode/
+.github/

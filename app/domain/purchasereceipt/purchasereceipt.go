@@ -1,0 +1,71 @@
+// Package domain_purchasereceipt — "Purchase Receipt": a standalone
+// proof-of-payment record, the AP mirror of Sales Receipt. No line items, no
+// draft/confirm lifecycle — its seeded permissions
+// (invoice-purchase-receipt-list/create only, no update/delete) say a
+// receipt is create-once, never edited or deleted through the API.
+package domain_purchasereceipt
+
+import (
+	"fmt"
+
+	"duluin_invoice/app/model"
+	"duluin_invoice/utils"
+)
+
+// CreateDTO — Number is optional; the service auto-generates one
+// (PKW/YYYY/NNNN) when blank. PurchaseInvoiceID is optional traceability
+// only — creating a receipt does not update the invoice's paid/outstanding
+// status (no partial-payment tracking exists here).
+type CreateDTO struct {
+	CompanyID         string  `json:"-"`
+	MitraID           string  `json:"mitra_id"            validate:"required,uuid4"`
+	PurchaseInvoiceID *string `json:"purchase_invoice_id" validate:"omitempty,uuid4"`
+	Number            string  `json:"number"              validate:"omitempty,max=50"`
+	Date              string  `json:"date"                validate:"required"` // YYYY-MM-DD
+	Amount            float64 `json:"amount"              validate:"gt=0"`
+	PaymentMethod     string  `json:"payment_method"      validate:"required,oneof=cash transfer other"`
+	BankAccountID     *string `json:"bank_account_id"     validate:"omitempty,uuid4"`
+	Notes             string  `json:"notes"               validate:"omitempty"`
+}
+
+// Filter drives the paginated list query.
+type Filter struct {
+	CompanyID string
+	Search    string
+	MitraID   string
+	Page      int
+	PageSize  int
+	Sort      string
+	Order     string
+	Fields    []string
+}
+
+type IRepository interface {
+	Create(dto *CreateDTO, actorID string) (*model.PurchaseReceipt, error)
+	FindByID(companyID, id string) (*model.PurchaseReceipt, error)
+	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
+	MitraExists(companyID, mitraID string) (bool, error)
+	PreviewNumber(companyID string) (string, error)
+}
+
+// IService — no Update/Delete, matching the seeded permissions exactly.
+type IService interface {
+	Create(companyID, actorID string, dto *CreateDTO) (*model.PurchaseReceipt, error)
+	Get(companyID, id string) (*model.PurchaseReceipt, error)
+	List(f *Filter) (*utils.OffsetPaginationResult, error)
+	PreviewNumber(companyID string) (string, error)
+}
+
+type ErrNotFound struct{ ID string }
+
+func (e *ErrNotFound) Error() string { return fmt.Sprintf("receipt %s not found", e.ID) }
+
+type ErrValidation struct{ Message string }
+
+func (e *ErrValidation) Error() string { return e.Message }
+
+type ErrNumberExists struct{ Number string }
+
+func (e *ErrNumberExists) Error() string {
+	return fmt.Sprintf("receipt no. %s is already in use", e.Number)
+}
