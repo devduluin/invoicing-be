@@ -36,6 +36,7 @@ type CreateDTO struct {
 	RefNo           string  `json:"ref_no"         validate:"omitempty,max=100"`
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
+	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
 
 	AdditionalDiscountType  string  `json:"additional_discount_type"  validate:"omitempty,oneof=percent amount"`
 	AdditionalDiscountValue float64 `json:"additional_discount_value" validate:"omitempty,gte=0"`
@@ -66,6 +67,7 @@ type UpdateDTO struct {
 	RefNo           string  `json:"ref_no"         validate:"omitempty,max=100"`
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
+	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
 
 	AdditionalDiscountType  string  `json:"additional_discount_type"  validate:"omitempty,oneof=percent amount"`
 	AdditionalDiscountValue float64 `json:"additional_discount_value" validate:"omitempty,gte=0"`
@@ -89,11 +91,15 @@ type Filter struct {
 	Search    string
 	MitraID   string
 	Status    string
-	Page      int
-	PageSize  int
-	Sort      string
-	Order     string
-	Fields    []string
+	// PaymentStatus (unpaid | partially_paid | paid) and Overdue (confirmed, not fully
+	// paid, due date before today) narrow the list for the "what needs collecting" views.
+	PaymentStatus string
+	Overdue       bool
+	Page          int
+	PageSize      int
+	Sort          string
+	Order         string
+	Fields        []string
 }
 
 type IRepository interface {
@@ -101,6 +107,7 @@ type IRepository interface {
 	Update(companyID, id string, dto *UpdateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error)
 	FindByID(companyID, id string) (*model.SalesInvoice, error)
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
+	Summary(companyID string) (*Summary, error)
 	Delete(companyID, id string) error
 	SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error
 	MitraExists(companyID, mitraID string) (bool, error)
@@ -115,6 +122,7 @@ type IService interface {
 	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.SalesInvoice, error)
 	Get(companyID, id string) (*model.SalesInvoice, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)
+	Summary(companyID string) (*Summary, error)
 	Delete(companyID, id string) error
 	Confirm(companyID, actorID, id string) (*model.SalesInvoice, error)
 	BackToDraft(companyID, actorID, id string) (*model.SalesInvoice, error)
@@ -147,3 +155,18 @@ func (e *ErrNotEditable) Error() string {
 type ErrInvalidTransition struct{ Message string }
 
 func (e *ErrInvalidTransition) Error() string { return e.Message }
+
+// SummaryFigure — a total and how many invoices make it up.
+type SummaryFigure struct {
+	Amount float64 `json:"amount"`
+	Count  int64   `json:"count"`
+}
+
+// Summary — the dashboard numbers for regular sales invoices (down payments excluded):
+// what is still owed, what is late, what was billed this month, and drafts not yet sent.
+type Summary struct {
+	Outstanding SummaryFigure `json:"outstanding"`
+	Overdue     SummaryFigure `json:"overdue"`
+	ThisMonth   SummaryFigure `json:"this_month"`
+	Drafts      int64         `json:"drafts"`
+}

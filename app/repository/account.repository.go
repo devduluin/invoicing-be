@@ -162,6 +162,9 @@ func (r *AccountRepository) Delete(companyID, id string) error {
 	} else if kids {
 		return &domain.ErrHasChildren{}
 	}
+	if err := checkAccountUnused(r.db, companyID, id); err != nil {
+		return err
+	}
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.Account{}).Error; err != nil {
 		return fmt.Errorf("delete account %s: %w", id, err)
 	}

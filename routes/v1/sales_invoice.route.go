@@ -14,6 +14,7 @@ import (
 func SalesInvoiceRoutes(router fiber.Router, ctrl *controller.SalesInvoiceController) {
 	g := router.Group("/sales-invoices")
 	g.Get("/", middlewares.RequirePermission("invoice-sales-invoice-list"), ctrl.List)
+	g.Get("/summary", middlewares.RequirePermission("invoice-sales-invoice-list"), ctrl.Summary)
 	g.Get("/next-number", middlewares.RequirePermission("invoice-sales-invoice-create"), ctrl.PreviewNumber)
 	g.Get("/:id", middlewares.RequirePermission("invoice-sales-invoice-list"), ctrl.Get)
 	g.Post("/", middlewares.RequirePermission("invoice-sales-invoice-create"), ctrl.Create)

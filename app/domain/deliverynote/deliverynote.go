@@ -1,8 +1,6 @@
 // Package domain_deliverynote — "Delivery Note" (Surat Jalan): a standalone
-// physical-shipment log. No price/tax, no draft/confirm lifecycle — its
-// seeded permissions (invoice-delivery-note-list/create only, no update/
-// delete) say a delivery note is create-once, never edited or deleted
-// through the API.
+// physical-shipment log. No price/tax, no draft/confirm lifecycle. It can be
+// edited and soft-deleted.
 package domain_deliverynote
 
 import (
@@ -24,12 +22,13 @@ type LineDTO struct {
 // creating a delivery note does not track remaining quantity to ship
 // against the order (no partial-fulfillment tracking exists here).
 type CreateDTO struct {
-	CompanyID    string  `json:"-"`
-	MitraID      string  `json:"mitra_id"       validate:"required,uuid4"`
-	SalesOrderID *string `json:"sales_order_id" validate:"omitempty,uuid4"`
-	Number       string  `json:"number"         validate:"omitempty,max=50"`
-	Date         string  `json:"date"           validate:"required"` // YYYY-MM-DD
-	Notes        string  `json:"notes"          validate:"omitempty"`
+	CompanyID      string  `json:"-"`
+	MitraID        string  `json:"mitra_id"         validate:"required,uuid4"`
+	SalesOrderID   *string `json:"sales_order_id"   validate:"omitempty,uuid4"`
+	SalesInvoiceID *string `json:"sales_invoice_id" validate:"omitempty,uuid4"`
+	Number         string  `json:"number"           validate:"omitempty,max=50"`
+	Date           string  `json:"date"           validate:"required"` // YYYY-MM-DD
+	Notes          string  `json:"notes"          validate:"omitempty"`
 
 	// Optional shipping/logistics detail — none required.
 	ShippingMethod string   `json:"shipping_method" validate:"omitempty,max=100"`
@@ -44,6 +43,10 @@ type CreateDTO struct {
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
+
+// UpdateDTO is the same shape as CreateDTO (a full replace of header and lines);
+// a blank Number keeps the current one.
+type UpdateDTO = CreateDTO
 
 // Filter drives the paginated list query. SalesOrderID scopes the Related
 // Documents sidebar on a sales invoice's detail page.
@@ -63,14 +66,18 @@ type IRepository interface {
 	Create(dto *CreateDTO, actorID string) (*model.DeliveryNote, error)
 	FindByID(companyID, id string) (*model.DeliveryNote, error)
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
+	Update(companyID, id string, dto *UpdateDTO, actorID string) (*model.DeliveryNote, error)
+	Delete(companyID, id string) error
 	MitraExists(companyID, mitraID string) (bool, error)
 }
 
-// IService — no Update/Delete, matching the seeded permissions exactly.
+// IService — Update replaces the whole record; Delete is a soft delete.
 type IService interface {
 	Create(companyID, actorID string, dto *CreateDTO) (*model.DeliveryNote, error)
 	Get(companyID, id string) (*model.DeliveryNote, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)
+	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.DeliveryNote, error)
+	Delete(companyID, id string) error
 }
 
 type ErrNotFound struct{ ID string }

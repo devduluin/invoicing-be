@@ -58,6 +58,28 @@ func (ctrl *DeliveryNoteController) Create(c *fiber.Ctx) error {
 	return utils.Created(c, row, "Delivery note added")
 }
 
+func (ctrl *DeliveryNoteController) Update(c *fiber.Ctx) error {
+	var dto domain.UpdateDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return utils.BadRequest(c, []string{"Invalid request body"})
+	}
+	if msgs := validation.Struct(&dto); msgs != nil {
+		return utils.ValidationFailed(c, msgs)
+	}
+	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
+	if err != nil {
+		return deliveryNoteErr(c, err)
+	}
+	return utils.Ok(c, row, "Delivery note updated")
+}
+
+func (ctrl *DeliveryNoteController) Delete(c *fiber.Ctx) error {
+	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
+		return deliveryNoteErr(c, err)
+	}
+	return utils.Deleted(c, "Delivery note deleted")
+}
+
 func deliveryNoteErr(c *fiber.Ctx, err error) error {
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {

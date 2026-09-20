@@ -35,6 +35,9 @@ func (r *PurchaseInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Li
 	if err != nil {
 		return nil, err
 	}
+	if dueDate != nil && dueDate.Before(date) {
+		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+	}
 
 	number := strings.TrimSpace(dto.Number)
 	if number != "" {
@@ -65,7 +68,7 @@ func (r *PurchaseInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Li
 			Date:                     date,
 			DueDate:                  dueDate,
 			RefNo:                    strings.TrimSpace(dto.RefNo),
-			Notes:                    strings.TrimSpace(dto.Notes),
+			Notes:                    utils.SanitizeRichText(dto.Notes),
 			Subtotal:                 calc.Subtotal,
 			DiscountTotal:            calc.DiscountTotal,
 			TaxTotal:                 calc.TaxTotal,
@@ -118,6 +121,9 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 	if err != nil {
 		return nil, err
 	}
+	if dueDate != nil && dueDate.Before(date) {
+		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+	}
 
 	number := strings.TrimSpace(dto.Number)
 	if number == "" {
@@ -139,7 +145,7 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 			"date":                       date,
 			"due_date":                   dueDate,
 			"ref_no":                     strings.TrimSpace(dto.RefNo),
-			"notes":                      strings.TrimSpace(dto.Notes),
+			"notes":                      utils.SanitizeRichText(dto.Notes),
 			"subtotal":                   calc.Subtotal,
 			"discount_total":             calc.DiscountTotal,
 			"tax_total":                  calc.TaxTotal,
@@ -233,22 +239,17 @@ func (r *PurchaseInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 	})
 }
 
+// Delete soft-deletes the document ONLY. Its lines (and line taxes) are kept on
+// purpose: hard-deleting them would leave a "deleted" document that can never be
+// audited or restored intact. Nothing reads lines except through a live parent.
 func (r *PurchaseInvoiceRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := deletePurchaseInvoiceLineTaxes(tx, id); err != nil {
-			return err
-		}
-		if err := tx.Where("purchase_invoice_id = ?", id).Delete(&model.PurchaseInvoiceLine{}).Error; err != nil {
-			return fmt.Errorf("delete purchase invoice lines %s: %w", id, err)
-		}
-		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseInvoice{}).Error; err != nil {
-			return fmt.Errorf("delete purchase invoice %s: %w", id, err)
-		}
-		return nil
-	})
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseInvoice{}).Error; err != nil {
+		return fmt.Errorf("delete purchase invoice %s: %w", id, err)
+	}
+	return nil
 }
 
 func (r *PurchaseInvoiceRepository) SetStatus(companyID, id, actorID string, status model.PurchaseInvoiceStatus) error {

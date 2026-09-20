@@ -35,6 +35,9 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 	if err != nil {
 		return nil, err
 	}
+	if dueDate != nil && dueDate.Before(date) {
+		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+	}
 
 	number := strings.TrimSpace(dto.Number)
 	if number != "" {
@@ -67,8 +70,8 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 			Date:                     date,
 			DueDate:                  dueDate,
 			RefNo:                    strings.TrimSpace(dto.RefNo),
-			Notes:                    strings.TrimSpace(dto.Notes),
-			Terms:                    strings.TrimSpace(dto.Terms),
+			Notes:                    utils.SanitizeRichText(dto.Notes),
+			Terms:                    utils.SanitizeRichText(dto.Terms),
 			Subtotal:                 calc.Subtotal,
 			DiscountTotal:            calc.DiscountTotal,
 			TaxTotal:                 calc.TaxTotal,
@@ -83,6 +86,7 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
 			SignatureData:            dto.SignatureData,
 			StampDuty:                dto.StampDuty,
+			Template:                 templateOrDefault(dto.Template),
 			CreatedBy:                actorID,
 			UpdatedBy:                actorID,
 		}
@@ -122,6 +126,9 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 	if err != nil {
 		return nil, err
 	}
+	if dueDate != nil && dueDate.Before(date) {
+		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+	}
 
 	number := strings.TrimSpace(dto.Number)
 	if number == "" {
@@ -144,8 +151,8 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 			"date":                       date,
 			"due_date":                   dueDate,
 			"ref_no":                     strings.TrimSpace(dto.RefNo),
-			"notes":                      strings.TrimSpace(dto.Notes),
-			"terms":                      strings.TrimSpace(dto.Terms),
+			"notes":                      utils.SanitizeRichText(dto.Notes),
+			"terms":                      utils.SanitizeRichText(dto.Terms),
 			"subtotal":                   calc.Subtotal,
 			"discount_total":             calc.DiscountTotal,
 			"tax_total":                  calc.TaxTotal,
@@ -162,6 +169,10 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 			"stamp_duty":                 dto.StampDuty,
 			"updated_at":                 time.Now(),
 			"updated_by":                 actorID,
+		}
+		// A client that doesn't send `template` must not reset the saved choice.
+		if strings.TrimSpace(dto.Template) != "" {
+			updates["template"] = strings.TrimSpace(dto.Template)
 		}
 		if err := tx.Model(&model.SalesInvoice{}).
 			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
@@ -225,6 +236,14 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)
 	}
+	if f.PaymentStatus != "" {
+		// comma-separated: "unpaid,partially_paid" = everything still owing
+		q = q.Where("payment_status IN ?", strings.Split(f.PaymentStatus, ","))
+	}
+	if f.Overdue {
+		q = q.Where("status = ? AND payment_status <> ? AND due_date IS NOT NULL AND due_date < ?",
+			model.SalesInvoiceStatusConfirmed, model.SalesInvoicePaymentPaid, time.Now().Format("2006-01-02"))
+	}
 
 	sortCol := utils.NormalizeSort(f.Sort, salesInvoiceListColumns, "date")
 	order := f.Order
@@ -243,25 +262,30 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 	})
 }
 
+// Delete soft-deletes the document ONLY. Its lines (and line taxes) are kept on
+// purpose: hard-deleting them would leave a "deleted" document that can never be
+// audited or restored intact. Nothing reads lines except through a live parent.
 func (r *SalesInvoiceRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := deleteSalesInvoiceLineTaxes(tx, id); err != nil {
-			return err
-		}
-		if err := tx.Where("sales_invoice_id = ?", id).Delete(&model.SalesInvoiceLine{}).Error; err != nil {
-			return fmt.Errorf("delete sales invoice lines %s: %w", id, err)
-		}
-		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesInvoice{}).Error; err != nil {
-			return fmt.Errorf("delete sales invoice %s: %w", id, err)
-		}
-		return nil
-	})
+	if err := checkInvoiceHasNoPayments(r.db, companyID, id); err != nil {
+		return err
+	}
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesInvoice{}).Error; err != nil {
+		return fmt.Errorf("delete sales invoice %s: %w", id, err)
+	}
+	return nil
 }
 
 func (r *SalesInvoiceRepository) SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error {
+	// Reverting to draft reopens the invoice for editing/deletion — never while
+	// payments or receipt allocations are applied to it.
+	if status == model.SalesInvoiceStatusDraft {
+		if err := checkInvoiceHasNoPayments(r.db, companyID, id); err != nil {
+			return err
+		}
+	}
 	res := r.db.Model(&model.SalesInvoice{}).Where("id = ? AND company_id = ?", id, companyID).
 		Updates(map[string]any{"status": status, "updated_at": time.Now(), "updated_by": actorID})
 	if res.Error != nil {
@@ -445,4 +469,52 @@ func parseOptionalSalesInvoiceDate(s string) (*time.Time, error) {
 // this kind right now — a preview for the Add page, not a reservation.
 func (r *SalesInvoiceRepository) PreviewNumber(companyID, kind string) (string, error) {
 	return generateSalesInvoiceNumber(r.db, companyID, model.SalesInvoiceKind(kind), time.Now())
+}
+
+func templateOrDefault(v string) string {
+	if v = strings.TrimSpace(v); v != "" {
+		return v
+	}
+	return string(model.DefaultSalesInvoiceTemplate)
+}
+
+// Summary aggregates the dashboard figures for regular (non down-payment) invoices.
+// Only confirmed invoices count toward money owed / billed; drafts are counted apart.
+func (r *SalesInvoiceRepository) Summary(companyID string) (*domain.Summary, error) {
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+
+	base := func() *gorm.DB {
+		return r.db.Model(&model.SalesInvoice{}).Where("company_id = ? AND kind = ?", companyID, "invoice")
+	}
+	figure := func(q *gorm.DB, expr string) (domain.SummaryFigure, error) {
+		var row struct {
+			Amount float64
+			Count  int64
+		}
+		if err := q.Select("COALESCE(SUM(" + expr + "), 0) AS amount, COUNT(*) AS count").Scan(&row).Error; err != nil {
+			return domain.SummaryFigure{}, err
+		}
+		return domain.SummaryFigure{Amount: round2(row.Amount), Count: row.Count}, nil
+	}
+
+	owed := func() *gorm.DB {
+		return base().Where("status = ? AND payment_status <> ?", model.SalesInvoiceStatusConfirmed, model.SalesInvoicePaymentPaid)
+	}
+	out := &domain.Summary{}
+	var err error
+	if out.Outstanding, err = figure(owed(), "grand_total - paid_amount"); err != nil {
+		return nil, fmt.Errorf("summary outstanding: %w", err)
+	}
+	if out.Overdue, err = figure(owed().Where("due_date IS NOT NULL AND due_date < ?", today), "grand_total - paid_amount"); err != nil {
+		return nil, fmt.Errorf("summary overdue: %w", err)
+	}
+	if out.ThisMonth, err = figure(base().Where("status = ? AND date >= ?", model.SalesInvoiceStatusConfirmed, monthStart), "grand_total"); err != nil {
+		return nil, fmt.Errorf("summary this month: %w", err)
+	}
+	if err := base().Where("status = ?", model.SalesInvoiceStatusDraft).Count(&out.Drafts).Error; err != nil {
+		return nil, fmt.Errorf("summary drafts: %w", err)
+	}
+	return out, nil
 }

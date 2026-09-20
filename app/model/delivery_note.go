@@ -8,20 +8,23 @@ import (
 )
 
 // DeliveryNote ("Surat Jalan") is a standalone physical-shipment log — no
-// price/tax, no draft/confirm lifecycle (matches its seeded permissions:
-// invoice-delivery-note-list/create only, no update/delete — a delivery
-// note is create-once). It optionally references the SalesOrder it
+// price/tax, no draft/confirm lifecycle; it can be edited and soft-deleted.
+// It optionally references the SalesOrder it
 // fulfills, purely for traceability and to power the frontend's
 // "pre-fill from order" convenience — no quantity-remaining tracking
 // across multiple notes against one order.
 type DeliveryNote struct {
-	ID           string    `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID    string    `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID      string    `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	SalesOrderID *string   `gorm:"type:uuid;index"            json:"sales_order_id,omitempty"`
-	Number       string    `gorm:"type:varchar(50);not null"  json:"number"`
-	Date         time.Time `gorm:"type:date;not null"         json:"date"`
-	Notes        string    `gorm:"type:text"                  json:"notes,omitempty"`
+	ID           string  `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID    string  `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID      string  `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	SalesOrderID *string `gorm:"type:uuid;index"            json:"sales_order_id,omitempty"`
+	// SalesInvoiceID — the same free-form traceability as SalesOrderID, for
+	// a delivery note raised from an already-billed invoice instead of an
+	// order. Either, both, or neither may be set.
+	SalesInvoiceID *string   `gorm:"type:uuid;index"            json:"sales_invoice_id,omitempty"`
+	Number         string    `gorm:"type:varchar(50);not null"  json:"number"`
+	Date           time.Time `gorm:"type:date;not null"         json:"date"`
+	Notes          string    `gorm:"type:text"                  json:"notes,omitempty"`
 
 	// Optional shipping/logistics detail — each surfaced behind its own
 	// checkbox on the frontend ("More Information"); none are required.

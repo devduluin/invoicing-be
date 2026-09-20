@@ -5,6 +5,7 @@ package notification
 
 import (
 	"context"
+	"fmt"
 	"log"
 )
 
@@ -34,5 +35,33 @@ func NewLogService() *LogService { return &LogService{} }
 func (s *LogService) SendUserInvite(_ context.Context, msg UserInvite) error {
 	log.Printf("[notification] (stub) invite email → %s <%s> | tenant=%q role=%s accept=%s",
 		msg.ToName, msg.ToEmail, msg.TenantName, msg.Role, msg.AcceptURL)
+	return nil
+}
+
+// SSOInviter is the subset of *sso.Client this package depends on — kept as
+// a plain-args interface (not sso.InviteRequest) so notification never
+// imports app/sso's full surface.
+type SSOInviter interface {
+	InviteSimple(ctx context.Context, email, name, redirectURL, inviterName, companyName, from string) error
+}
+
+// SSOInviteService sends the invite email through SSO's own POST /invite,
+// passing our own AcceptURL as redirect_url so SSO's email points at this
+// product's existing accept-invite flow instead of SSO's own /accept-invite
+// page. SSO creates/links the shadow user as a side effect; invoicing-be's
+// own UserAccountSSO row (and its InviteToken) remains the source of truth.
+type SSOInviteService struct {
+	sso  SSOInviter
+	from string
+}
+
+func NewSSOInviteService(sso SSOInviter, from string) *SSOInviteService {
+	return &SSOInviteService{sso: sso, from: from}
+}
+
+func (s *SSOInviteService) SendUserInvite(ctx context.Context, msg UserInvite) error {
+	if err := s.sso.InviteSimple(ctx, msg.ToEmail, msg.ToName, msg.AcceptURL, msg.InviterName, msg.TenantName, s.from); err != nil {
+		return fmt.Errorf("send invite via sso: %w", err)
+	}
 	return nil
 }

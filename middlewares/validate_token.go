@@ -3,6 +3,7 @@ package middlewares
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,10 @@ const (
 
 // CachedTokenData is the subset of the SSO user we keep in Redis / fiber locals.
 type CachedTokenData struct {
+	// ReissuedToken is set only on the request that triggered a single-device
+	// reissue; never cached (json:"-") so it isn't replayed to other clients.
+	ReissuedToken string `json:"-"`
+
 	CompanyID   string   `json:"company_id"`
 	UserID      string   `json:"user_id"`
 	Name        string   `json:"name"`
@@ -35,9 +40,11 @@ type CachedTokenData struct {
 }
 
 type ssoSigninCookiesResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	User    struct {
+	Success       bool   `json:"success"`
+	Message       string `json:"message"`
+	Token         string `json:"token"`
+	TokenReissued bool   `json:"token_reissued"`
+	User          struct {
 		ID          string      `json:"id"`
 		Name        string      `json:"name"`
 		Email       string      `json:"email"`
@@ -88,9 +95,21 @@ func ValidateTokenForAccount(accountType string) fiber.Handler {
 			var err error
 			tokenData, err = validateWithSSO(authHeader, activeCompanyID, accountType, requestID)
 			if err != nil {
+				// Only an SSO verdict that the token is dead is a 401 (the frontend
+				// logs the user out on 401). Anything else — timeout, 5xx, 429,
+				// unparsable reply — says nothing about the session, so it must not
+				// look like an expired login.
+				if isTransientSSOError(err) {
+					return ssoUnavailable(c)
+				}
 				return unauthorized(c, err.Error())
 			}
 			setCachedToken(cacheKey, tokenData)
+			if tokenData.ReissuedToken != "" {
+				// Single-device accounts: SSO revoked the presented token and minted
+				// a replacement. Hand it to the client so the next request doesn't 401.
+				c.Set("X-Reissued-Token", tokenData.ReissuedToken)
+			}
 		}
 
 		if activeCompanyID != "" {
@@ -106,12 +125,42 @@ func ValidateTokenForAccount(accountType string) fiber.Handler {
 	}
 }
 
+// ssoTransientError marks an SSO failure that says nothing about the session
+// (network error/timeout, 5xx, 429, misconfiguration, unparsable reply).
+type ssoTransientError struct{ msg string }
+
+func (e *ssoTransientError) Error() string { return e.msg }
+
+func isTransientSSOError(err error) bool {
+	var t *ssoTransientError
+	return errors.As(err, &t)
+}
+
+const ssoTransientRetries = 1
+
+// validateWithSSO retries once on a transient failure so a momentary SSO/gateway
+// blip doesn't surface to the client at all.
 func validateWithSSO(authHeader, activeCompanyID, accountType, requestID string) (*CachedTokenData, error) {
+	var lastErr error
+	for attempt := 0; attempt <= ssoTransientRetries; attempt++ {
+		data, err := validateWithSSOOnce(authHeader, activeCompanyID, accountType, requestID)
+		if err == nil || !isTransientSSOError(err) {
+			return data, err
+		}
+		lastErr = err
+		if attempt < ssoTransientRetries {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	return nil, lastErr
+}
+
+func validateWithSSOOnce(authHeader, activeCompanyID, accountType, requestID string) (*CachedTokenData, error) {
 	validateURL := fmt.Sprintf("%s/users/signin-cookies", strings.TrimSuffix(config.AppConfig.SSOURL, "/"))
 
 	req, err := http.NewRequest(http.MethodGet, validateURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build SSO request: %v", err)
+		return nil, &ssoTransientError{msg: fmt.Sprintf("failed to build SSO request: %v", err)}
 	}
 	req.Header.Set("Authorization", strings.Clone(authHeader))
 	req.Header.Set("Accept", "application/json")
@@ -123,20 +172,28 @@ func validateWithSSO(authHeader, activeCompanyID, accountType, requestID string)
 	resp, err := utils.NewOutboundHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		log.Printf("[ValidateToken] request_id=%s sso_request_failed err=%v", requestID, err)
-		return nil, fmt.Errorf("failed to validate token")
+		return nil, &ssoTransientError{msg: "failed to reach SSO"}
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[ValidateToken] request_id=%s sso_non_200 status=%d body=%s", requestID, resp.StatusCode, string(body))
+	switch {
+	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusUnauthorized:
+		// SSO's own "Invalid or expired token" verdict — the one true dead session.
+		log.Printf("[ValidateToken] request_id=%s sso_401 body=%s", requestID, string(body))
 		return nil, fmt.Errorf("session expired or unauthorized")
+	default:
+		// 404/422 (unknown account type / missing header) are our misconfiguration,
+		// 429/5xx are SSO or gateway trouble: none of them prove the token is bad.
+		log.Printf("[ValidateToken] request_id=%s sso_non_200 status=%d body=%s", requestID, resp.StatusCode, string(body))
+		return nil, &ssoTransientError{msg: fmt.Sprintf("SSO returned %d", resp.StatusCode)}
 	}
 
 	var parsed ssoSigninCookiesResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		log.Printf("[ValidateToken] request_id=%s sso_bad_json err=%v", requestID, err)
-		return nil, fmt.Errorf("failed to parse SSO response")
+		return nil, &ssoTransientError{msg: "failed to parse SSO response"}
 	}
 	if !parsed.Success {
 		return nil, fmt.Errorf("token validation failed: %s", parsed.Message)
@@ -159,7 +216,7 @@ func validateWithSSO(authHeader, activeCompanyID, accountType, requestID string)
 		}
 	}
 
-	return &CachedTokenData{
+	data := &CachedTokenData{
 		UserID:      strings.TrimSpace(parsed.User.ID),
 		Name:        parsed.User.Name,
 		Email:       parsed.User.Email,
@@ -167,7 +224,11 @@ func validateWithSSO(authHeader, activeCompanyID, accountType, requestID string)
 		Permissions: toStringSlice(parsed.User.Permissions),
 		IsActivated: isActivated,
 		IsBanned:    isBanned,
-	}, nil
+	}
+	if parsed.TokenReissued && strings.TrimSpace(parsed.Token) != "" {
+		data.ReissuedToken = strings.TrimSpace(parsed.Token)
+	}
+	return data, nil
 }
 
 // ── cache ───────────────────────────────────────────────────────────────────
@@ -215,6 +276,16 @@ func setLocals(c *fiber.Ctx, data *CachedTokenData) {
 
 func unauthorized(c *fiber.Ctx, message string) error {
 	return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"success": false, "message": message})
+}
+
+// ssoUnavailable — token could not be verified right now. 503 (not 401) so the
+// client keeps the session and retries instead of logging the user out.
+func ssoUnavailable(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+		"success":    false,
+		"message":    "Authentication service temporarily unavailable",
+		"error_code": "sso_unavailable",
+	})
 }
 
 func toBool(v interface{}) bool {

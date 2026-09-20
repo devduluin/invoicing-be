@@ -1,7 +1,7 @@
 // Package domain_salesreceipt — "Sales Receipt": a standalone
-// proof-of-payment record. No line items, no draft/confirm lifecycle — its
-// seeded permissions (invoice-receipt-list/create only, no update/delete)
-// say a receipt is create-once, never edited or deleted through the API.
+// proof-of-payment record. No line items, no draft/confirm lifecycle. It can
+// be edited (allocations are reversed and re-applied) and soft-deleted
+// (allocations are reversed).
 package domain_salesreceipt
 
 import (
@@ -34,6 +34,9 @@ type CreateDTO struct {
 	Allocations   []AllocationDTO `json:"allocations"     validate:"required,min=1,dive"`
 }
 
+// UpdateDTO is the same shape as CreateDTO (full replace); a blank Number keeps the current one.
+type UpdateDTO = CreateDTO
+
 // Filter drives the paginated list query. SalesInvoiceID (optional) scopes
 // to receipts with an allocation against that invoice — not wired into any
 // UI yet, but mirrors domain_salespayment.Filter for a future "Related
@@ -56,14 +59,19 @@ type IRepository interface {
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
 	MitraExists(companyID, mitraID string) (bool, error)
 	PreviewNumber(companyID string) (string, error)
+	Update(companyID, id string, dto *UpdateDTO, actorID string) (*model.SalesReceipt, error)
+	Delete(companyID, id string) error
 }
 
-// IService — no Update/Delete, matching the seeded permissions exactly.
+// IService — Update replaces the receipt (its allocations are reversed and
+// re-applied); Delete is a soft delete that reverses the allocations.
 type IService interface {
 	Create(companyID, actorID string, dto *CreateDTO) (*model.SalesReceipt, error)
 	Get(companyID, id string) (*model.SalesReceipt, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)
 	PreviewNumber(companyID string) (string, error)
+	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.SalesReceipt, error)
+	Delete(companyID, id string) error
 }
 
 type ErrNotFound struct{ ID string }

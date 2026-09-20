@@ -60,6 +60,85 @@ func (c *Client) SetSecondaryID(ctx context.Context, ssoUserID, secondaryID stri
 	})
 }
 
+// Invite calls SSO's generic POST /invite, which creates a shadow SSO user
+// for a brand-new email (or links an existing one) and sends its own
+// transactional email. RedirectURL, when set, is honored by SSO as the
+// literal accept-link the email points to (instead of SSO's own
+// /accept-invite construction) — see the invite controller's redirect_url
+// handling.
+type InviteRequest struct {
+	Email       string
+	Name        string
+	CompanyID   string
+	RedirectURL string
+	InviterName string
+	CompanyName string
+	From        string
+}
+
+type InviteResult struct {
+	Email string `json:"email"`
+	IsNew bool   `json:"is_new"`
+	URL   string `json:"url"`
+}
+
+func (c *Client) Invite(ctx context.Context, req InviteRequest) (*InviteResult, error) {
+	if strings.TrimSpace(req.Email) == "" {
+		return nil, fmt.Errorf("sso invite: missing email")
+	}
+	payload := map[string]any{
+		"email":        req.Email,
+		"name":         req.Name,
+		"account_type": c.accountType,
+		"company_id":   req.CompanyID,
+		"redirect_url": req.RedirectURL,
+		"inviter_name": req.InviterName,
+		"company_name": req.CompanyName,
+	}
+	if req.From != "" {
+		payload["from"] = req.From
+	}
+	raw, err := c.do(ctx, http.MethodPost, "/invite", "", payload)
+	if err != nil {
+		return nil, err
+	}
+	var env struct {
+		Data InviteResult `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("sso invite: decode response: %w", err)
+	}
+	return &env.Data, nil
+}
+
+// InviteSimple adapts Invite to notification.SSOInviter's plain-args shape.
+func (c *Client) InviteSimple(ctx context.Context, email, name, redirectURL, inviterName, companyName, from string) error {
+	_, err := c.Invite(ctx, InviteRequest{
+		Email:       email,
+		Name:        name,
+		RedirectURL: redirectURL,
+		InviterName: inviterName,
+		CompanyName: companyName,
+		From:        from,
+	})
+	return err
+}
+
+// UserExists calls SSO's POST /auth/user-validation to check whether an
+// email already has an account for this product. A 404 means "not
+// registered" — a normal outcome, not a failure.
+func (c *Client) UserExists(ctx context.Context, email string) (bool, error) {
+	_, err := c.do(ctx, http.MethodPost, "/auth/user-validation", "", map[string]any{"email": email})
+	if err == nil {
+		return true, nil
+	}
+	var ssoErr *Error
+	if as(err, &ssoErr) && ssoErr.Status == http.StatusNotFound {
+		return false, nil
+	}
+	return false, err
+}
+
 func (c *Client) postForm(ctx context.Context, path string, payload map[string]any) error {
 	if s, _ := payload["user_id"].(string); strings.TrimSpace(s) == "" {
 		return fmt.Errorf("sso %s: missing user id", path)

@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"duluin_invoice/app/model"
+	"duluin_invoice/app/repository"
 	"duluin_invoice/config"
 	"duluin_invoice/database"
 	"duluin_invoice/middlewares"
@@ -34,6 +35,10 @@ func main() {
 
 	if err := model.AutoMigrateAll(database.DB); err != nil {
 		log.Fatalf("Schema migration failed: %v", err)
+	}
+
+	if err := repository.BackfillUnitsOnce(database.DB); err != nil {
+		log.Printf("⚠️  Unit backfill warning: %v", err)
 	}
 
 	if err := database.ConnectRedis(); err != nil {

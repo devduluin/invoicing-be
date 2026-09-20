@@ -57,7 +57,7 @@ func (r *SalesOrderRepository) Create(dto *domain.CreateDTO, calc *domain.OrderC
 			Number:                   n,
 			Date:                     date,
 			RefNo:                    strings.TrimSpace(dto.RefNo),
-			Notes:                    strings.TrimSpace(dto.Notes),
+			Notes:                    utils.SanitizeRichText(dto.Notes),
 			Subtotal:                 calc.Subtotal,
 			DiscountTotal:            calc.DiscountTotal,
 			TaxTotal:                 calc.TaxTotal,
@@ -125,7 +125,7 @@ func (r *SalesOrderRepository) Update(companyID, id string, dto *domain.UpdateDT
 			"number":                     number,
 			"date":                       date,
 			"ref_no":                     strings.TrimSpace(dto.RefNo),
-			"notes":                      strings.TrimSpace(dto.Notes),
+			"notes":                      utils.SanitizeRichText(dto.Notes),
 			"subtotal":                   calc.Subtotal,
 			"discount_total":             calc.DiscountTotal,
 			"tax_total":                  calc.TaxTotal,
@@ -219,22 +219,17 @@ func (r *SalesOrderRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginatio
 	})
 }
 
+// Delete soft-deletes the document ONLY. Its lines (and line taxes) are kept on
+// purpose: hard-deleting them would leave a "deleted" document that can never be
+// audited or restored intact. Nothing reads lines except through a live parent.
 func (r *SalesOrderRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := deleteSalesOrderLineTaxes(tx, id); err != nil {
-			return err
-		}
-		if err := tx.Where("sales_order_id = ?", id).Delete(&model.SalesOrderLine{}).Error; err != nil {
-			return fmt.Errorf("delete sales order lines %s: %w", id, err)
-		}
-		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesOrder{}).Error; err != nil {
-			return fmt.Errorf("delete sales order %s: %w", id, err)
-		}
-		return nil
-	})
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesOrder{}).Error; err != nil {
+		return fmt.Errorf("delete sales order %s: %w", id, err)
+	}
+	return nil
 }
 
 func (r *SalesOrderRepository) SetStatus(companyID, id, actorID string, status model.SalesOrderStatus) error {

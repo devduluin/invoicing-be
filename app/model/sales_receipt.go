@@ -26,9 +26,8 @@ func IsValidSalesReceiptPaymentMethod(v string) bool {
 }
 
 // SalesReceipt ("Kuitansi Penjualan") is a proof-of-payment record — no
-// draft/confirm lifecycle (matches its seeded permissions:
-// invoice-receipt-list/create only, no update/delete — a receipt is
-// create-once). It allocates its payment across one or more invoices via
+// draft/confirm lifecycle; it can be edited and soft-deleted (both reverse
+// the allocations on the invoices first). It allocates its payment across one or more invoices via
 // Allocations; each allocation updates that invoice's PaidAmount/
 // PaymentStatus (see SalesReceiptRepository.Create /
 // repository.applySalesInvoicePayment) — the same balance fields

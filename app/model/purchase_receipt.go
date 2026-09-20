@@ -27,8 +27,7 @@ func IsValidPurchaseReceiptPaymentMethod(v string) bool {
 
 // PurchaseReceipt ("Purchase Receipt") is a standalone proof-of-payment
 // record — the AP mirror of SalesReceipt — no line items, no draft/confirm
-// lifecycle (matches its seeded permissions: invoice-purchase-receipt-
-// list/create only, no update/delete — a receipt is create-once). It
+// lifecycle; it can be edited and soft-deleted. It
 // optionally references the PurchaseInvoice it's a receipt for, but does
 // not update that invoice's paid/outstanding status — there's no
 // partial-payment tracking in this scope.

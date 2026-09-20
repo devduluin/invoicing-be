@@ -231,19 +231,17 @@ func (r *JournalRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginationRe
 	})
 }
 
+// Delete soft-deletes the document ONLY. Its lines (and line taxes) are kept on
+// purpose: hard-deleting them would leave a "deleted" document that can never be
+// audited or restored intact. Nothing reads lines except through a live parent.
 func (r *JournalRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("journal_entry_id = ?", id).Delete(&model.JournalLine{}).Error; err != nil {
-			return fmt.Errorf("delete journal lines %s: %w", id, err)
-		}
-		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.JournalEntry{}).Error; err != nil {
-			return fmt.Errorf("delete journal entry %s: %w", id, err)
-		}
-		return nil
-	})
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.JournalEntry{}).Error; err != nil {
+		return fmt.Errorf("delete journal entry %s: %w", id, err)
+	}
+	return nil
 }
 
 func (r *JournalRepository) SetStatus(companyID, id, actorID string, status model.JournalEntryStatus) error {

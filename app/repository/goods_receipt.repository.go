@@ -56,7 +56,7 @@ func (r *GoodsReceiptRepository) Create(dto *domain.CreateDTO, actorID string) (
 			PurchaseOrderID: trimPtr(dto.PurchaseOrderID),
 			Number:          n,
 			Date:            date,
-			Notes:           strings.TrimSpace(dto.Notes),
+			Notes:           utils.SanitizeRichText(dto.Notes),
 			ShippingMethod:  strings.TrimSpace(dto.ShippingMethod),
 			TrackingNo:      strings.TrimSpace(dto.TrackingNo),
 			VehicleNo:       strings.TrimSpace(dto.VehicleNo),
@@ -181,4 +181,82 @@ func buildGoodsReceiptLines(lines []domain.LineDTO, companyID, receiptID string)
 		})
 	}
 	return out
+}
+
+func (r *GoodsReceiptRepository) numberExistsExcept(companyID, number, exceptID string) (bool, error) {
+	var n int64
+	err := r.db.Model(&model.GoodsReceipt{}).
+		Where("company_id = ? AND lower(number) = lower(?) AND id <> ?", companyID, number, exceptID).Count(&n).Error
+	if err != nil {
+		return false, fmt.Errorf("check goods receipt number: %w", err)
+	}
+	return n > 0, nil
+}
+
+// Update replaces the header and the lines. A blank Number keeps the current one.
+func (r *GoodsReceiptRepository) Update(companyID, id string, dto *domain.UpdateDTO, actorID string) (*model.GoodsReceipt, error) {
+	existing, err := r.FindByID(companyID, id)
+	if err != nil {
+		return nil, err
+	}
+	date, err := time.Parse("2006-01-02", strings.TrimSpace(dto.Date))
+	if err != nil {
+		return nil, &domain.ErrValidation{Message: "invalid date (format YYYY-MM-DD)"}
+	}
+	number := strings.TrimSpace(dto.Number)
+	if number == "" {
+		number = existing.Number
+	}
+	if !strings.EqualFold(number, existing.Number) {
+		if taken, err := r.numberExistsExcept(companyID, number, id); err != nil {
+			return nil, err
+		} else if taken {
+			return nil, &domain.ErrNumberExists{Number: number}
+		}
+	}
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"mitra_id":          dto.MitraID,
+			"purchase_order_id": trimPtr(dto.PurchaseOrderID),
+			"number":            number,
+			"date":              date,
+			"notes":             utils.SanitizeRichText(dto.Notes),
+			"shipping_method":   strings.TrimSpace(dto.ShippingMethod),
+			"tracking_no":       strings.TrimSpace(dto.TrackingNo),
+			"vehicle_no":        strings.TrimSpace(dto.VehicleNo),
+			"driver_name":       strings.TrimSpace(dto.DriverName),
+			"total_weight":      dto.TotalWeight,
+			"attachment_data":   dto.AttachmentData,
+			"attachment_name":   strings.TrimSpace(dto.AttachmentName),
+			"updated_at":        time.Now(),
+			"updated_by":        actorID,
+		}
+		if err := tx.Model(&model.GoodsReceipt{}).Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update goods receipt %s: %w", id, err)
+		}
+		if err := tx.Where("goods_receipt_id = ?", id).Delete(&model.GoodsReceiptLine{}).Error; err != nil {
+			return fmt.Errorf("replace goods receipt lines %s: %w", id, err)
+		}
+		lines := buildGoodsReceiptLines(dto.Lines, companyID, id)
+		if err := tx.Create(&lines).Error; err != nil {
+			return fmt.Errorf("create goods receipt lines: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.FindByID(companyID, id)
+}
+
+// Delete soft-deletes the record only; its lines are kept so it stays auditable.
+func (r *GoodsReceiptRepository) Delete(companyID, id string) error {
+	if _, err := r.FindByID(companyID, id); err != nil {
+		return err
+	}
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.GoodsReceipt{}).Error; err != nil {
+		return fmt.Errorf("delete goods receipt %s: %w", id, err)
+	}
+	return nil
 }

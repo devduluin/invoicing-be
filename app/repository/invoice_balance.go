@@ -62,3 +62,31 @@ func applySalesInvoicePayment(tx *gorm.DB, companyID, invoiceID string, amount f
 		"payment_status": status,
 	}).Error
 }
+
+// reverseSalesInvoicePayment undoes a previous allocation: subtracts amount
+// from PaidAmount (never below 0) and re-derives PaymentStatus. Used when a
+// receipt is edited or soft-deleted. The invoice row is locked; run inside a
+// transaction and lock multiple invoices in sorted-ID order.
+func reverseSalesInvoicePayment(tx *gorm.DB, companyID, invoiceID string, amount float64) error {
+	var invoice model.SalesInvoice
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND company_id = ?", invoiceID, companyID).
+		First(&invoice).Error; err != nil {
+		return fmt.Errorf("lock invoice %s: %w", invoiceID, err)
+	}
+	paidAmount := round2(invoice.PaidAmount - amount)
+	if paidAmount < 0 {
+		paidAmount = 0
+	}
+	status := model.SalesInvoicePaymentUnpaid
+	switch {
+	case paidAmount >= invoice.GrandTotal && invoice.GrandTotal > 0:
+		status = model.SalesInvoicePaymentPaid
+	case paidAmount > 0:
+		status = model.SalesInvoicePaymentPartiallyPaid
+	}
+	return tx.Unscoped().Model(&model.SalesInvoice{}).Where("id = ?", invoice.ID).Updates(map[string]interface{}{
+		"paid_amount":    paidAmount,
+		"payment_status": status,
+	}).Error
+}

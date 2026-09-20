@@ -19,6 +19,29 @@ const (
 	SalesInvoiceKindDownPayment SalesInvoiceKind = "down_payment"
 )
 
+// SalesInvoiceTemplate — which of the four printable layouts this invoice uses
+// (create/edit preview, detail page and the PDF all render the same one).
+// Stored per invoice; presentation only, never affects amounts.
+type SalesInvoiceTemplate string
+
+const (
+	SalesInvoiceTemplate1 SalesInvoiceTemplate = "template_1"
+	SalesInvoiceTemplate2 SalesInvoiceTemplate = "template_2"
+	SalesInvoiceTemplate3 SalesInvoiceTemplate = "template_3"
+	SalesInvoiceTemplate4 SalesInvoiceTemplate = "template_4"
+
+	DefaultSalesInvoiceTemplate = SalesInvoiceTemplate1
+)
+
+func IsValidSalesInvoiceTemplate(v string) bool {
+	switch SalesInvoiceTemplate(v) {
+	case SalesInvoiceTemplate1, SalesInvoiceTemplate2, SalesInvoiceTemplate3, SalesInvoiceTemplate4:
+		return true
+	default:
+		return false
+	}
+}
+
 func IsValidSalesInvoiceKind(v string) bool {
 	switch SalesInvoiceKind(v) {
 	case SalesInvoiceKindInvoice, SalesInvoiceKindDownPayment:
@@ -57,20 +80,23 @@ type SalesInvoice struct {
 	// LinkedInvoiceID — for a down-payment invoice (Kind=down_payment),
 	// the regular invoice it's a down payment against. Purely a reference,
 	// like SalesOrderID — no automatic balance/amount coupling.
-	LinkedInvoiceID *string            `gorm:"type:uuid;index"            json:"linked_invoice_id,omitempty"`
-	MitraID         string             `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	Kind            SalesInvoiceKind   `gorm:"type:varchar(20);not null;index" json:"kind"`
-	Number          string             `gorm:"type:varchar(50);not null"  json:"number"`
-	Date            time.Time          `gorm:"type:date;not null"         json:"date"`
-	DueDate         *time.Time         `gorm:"type:date"                  json:"due_date,omitempty"`
-	RefNo           string             `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
-	Notes           string             `gorm:"type:text"                  json:"notes,omitempty"`
-	Terms           string             `gorm:"type:text"                  json:"terms,omitempty"`
-	Status          SalesInvoiceStatus `gorm:"type:varchar(20);not null;default:'draft';index" json:"status"`
-	Subtotal        float64            `gorm:"type:numeric(18,2);not null;default:0" json:"subtotal"`
-	DiscountTotal   float64            `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
-	TaxTotal        float64            `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
-	GrandTotal      float64            `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
+	LinkedInvoiceID *string          `gorm:"type:uuid;index"            json:"linked_invoice_id,omitempty"`
+	MitraID         string           `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	Kind            SalesInvoiceKind `gorm:"type:varchar(20);not null;index" json:"kind"`
+	Number          string           `gorm:"type:varchar(50);not null"  json:"number"`
+	Date            time.Time        `gorm:"type:date;not null"         json:"date"`
+	DueDate         *time.Time       `gorm:"type:date"                  json:"due_date,omitempty"`
+	RefNo           string           `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
+	Notes           string           `gorm:"type:text"                  json:"notes,omitempty"`
+	Terms           string           `gorm:"type:text"                  json:"terms,omitempty"`
+	// Template — layout choice, see SalesInvoiceTemplate. Existing rows pick up
+	// the column default (template_1) on migration.
+	Template      string             `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
+	Status        SalesInvoiceStatus `gorm:"type:varchar(20);not null;default:'draft';index" json:"status"`
+	Subtotal      float64            `gorm:"type:numeric(18,2);not null;default:0" json:"subtotal"`
+	DiscountTotal float64            `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
+	TaxTotal      float64            `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
+	GrandTotal    float64            `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
 
 	// Document-level discount applied on top of the line totals, in
 	// addition to any per-line discount — see utils.CalcLines.

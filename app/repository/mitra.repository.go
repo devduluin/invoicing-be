@@ -159,6 +159,12 @@ func normalisePage(page, pageSize int) (int, int) {
 
 // Delete — 1 DELETE (soft), company-scoped.
 func (r *MitraRepository) Delete(companyID, id string) error {
+	if _, err := r.FindByID(companyID, id); err != nil {
+		return err
+	}
+	if err := checkMitraUnused(r.db, companyID, id); err != nil {
+		return err
+	}
 	result := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.Mitra{})
 	if result.Error != nil {
 		return fmt.Errorf("delete mitra %s: %w", id, result.Error)

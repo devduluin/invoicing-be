@@ -1,8 +1,6 @@
 // Package domain_purchasereceipt — "Purchase Receipt": a standalone
 // proof-of-payment record, the AP mirror of Sales Receipt. No line items, no
-// draft/confirm lifecycle — its seeded permissions
-// (invoice-purchase-receipt-list/create only, no update/delete) say a
-// receipt is create-once, never edited or deleted through the API.
+// draft/confirm lifecycle. It can be edited and soft-deleted.
 package domain_purchasereceipt
 
 import (
@@ -28,6 +26,9 @@ type CreateDTO struct {
 	Notes             string  `json:"notes"               validate:"omitempty"`
 }
 
+// UpdateDTO is the same shape as CreateDTO (full replace); a blank Number keeps the current one.
+type UpdateDTO = CreateDTO
+
 // Filter drives the paginated list query.
 type Filter struct {
 	CompanyID string
@@ -46,14 +47,18 @@ type IRepository interface {
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
 	MitraExists(companyID, mitraID string) (bool, error)
 	PreviewNumber(companyID string) (string, error)
+	Update(companyID, id string, dto *UpdateDTO, actorID string) (*model.PurchaseReceipt, error)
+	Delete(companyID, id string) error
 }
 
-// IService — no Update/Delete, matching the seeded permissions exactly.
+// IService — Update replaces the receipt; Delete is a soft delete.
 type IService interface {
 	Create(companyID, actorID string, dto *CreateDTO) (*model.PurchaseReceipt, error)
 	Get(companyID, id string) (*model.PurchaseReceipt, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)
 	PreviewNumber(companyID string) (string, error)
+	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.PurchaseReceipt, error)
+	Delete(companyID, id string) error
 }
 
 type ErrNotFound struct{ ID string }

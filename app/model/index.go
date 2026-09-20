@@ -9,12 +9,14 @@ import (
 // AllModels lists every table managed by AutoMigrate.
 func AllModels() []interface{} {
 	return []interface{}{
+		&MigrationRecord{},
 		&Company{},
 		&UserAccountSSO{},
 		&Mitra{},
 		&BankAccount{},
 		&Account{},
 		&Tax{},
+		&Unit{},
 		&JournalBook{},
 		&JournalEntry{},
 		&JournalLine{},
@@ -98,6 +100,8 @@ func ensurePartialIndexes(db *gorm.DB) error {
 		 ON taxes (component1_id) WHERE deleted_at IS NULL AND component1_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_taxes_component2
 		 ON taxes (component2_id) WHERE deleted_at IS NULL AND component2_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_units_company_active
+		 ON units (company_id) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_journal_books_company_code_active
 		 ON journal_books (company_id, lower(code)) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_journal_entries_company_number_active

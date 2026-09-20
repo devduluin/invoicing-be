@@ -52,6 +52,10 @@ func (s *SalesInvoiceService) Get(companyID, id string) (*model.SalesInvoice, er
 	return s.repo.FindByID(companyID, id)
 }
 
+func (s *SalesInvoiceService) Summary(companyID string) (*domain.Summary, error) {
+	return s.repo.Summary(companyID)
+}
+
 func (s *SalesInvoiceService) List(f *domain.Filter) (*utils.OffsetPaginationResult, error) {
 	return s.repo.FindAll(f)
 }

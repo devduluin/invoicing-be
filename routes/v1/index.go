@@ -22,8 +22,8 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	})
 
 	// ── infrastructure adapters ──
-	notifier := notification.NewLogService()
 	ssoClient := sso.NewClient(config.AppConfig.SSOURL, config.AppConfig.SSOAccountType, config.AppConfig.APIKey)
+	notifier := notification.NewSSOInviteService(ssoClient, "duluin_invoice_invite")
 	rbacCache := service.NewRedisRBACCache(database.Redis)
 
 	// ── repositories ──
@@ -33,6 +33,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	bankAccountRepo := repository.NewBankAccountRepository(db)
 	accountRepo := repository.NewAccountRepository(db)
 	taxRepo := repository.NewTaxRepository(db)
+	unitRepo := repository.NewUnitRepository(db)
 	journalBookRepo := repository.NewJournalBookRepository(db)
 	journalRepo := repository.NewJournalRepository(db)
 	reportRepo := repository.NewReportRepository(db)
@@ -57,7 +58,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 		config.AppConfig.WebURL,
 	)
 	roleSvc := service.NewRoleService(ssoClient, membershipRepo, membershipSvc)
-	defaultsSvc := service.NewMasterDefaultsService(accountRepo, taxRepo)
+	defaultsSvc := service.NewMasterDefaultsService(accountRepo, taxRepo, unitRepo)
 	onboardingSvc := service.NewOnboardingService(onboardingRepo, membershipSvc, defaultsSvc)
 	companySvc := service.NewCompanyService(onboardingRepo, ssoClient)
 	mitraSvc := service.NewMitraService(mitraRepo)
@@ -65,6 +66,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	bankAccountSvc := service.NewBankAccountService(bankAccountRepo)
 	accountSvc := service.NewAccountService(accountRepo)
 	taxSvc := service.NewTaxService(taxRepo)
+	unitSvc := service.NewUnitService(unitRepo)
 	journalBookSvc := service.NewJournalBookService(journalBookRepo)
 	journalSvc := service.NewJournalService(journalRepo)
 	reportSvc := service.NewReportService(reportRepo)
@@ -89,6 +91,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	bankAccountCtrl := controller.NewBankAccountController(bankAccountSvc)
 	accountCtrl := controller.NewAccountController(accountSvc)
 	taxCtrl := controller.NewTaxController(taxSvc)
+	unitCtrl := controller.NewUnitController(unitSvc)
 	journalBookCtrl := controller.NewJournalBookController(journalBookSvc)
 	journalCtrl := controller.NewJournalController(journalSvc)
 	reportCtrl := controller.NewReportController(reportSvc)
@@ -119,6 +122,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	BankAccountRoutes(business, bankAccountCtrl)
 	AccountRoutes(business, accountCtrl)
 	TaxRoutes(business, taxCtrl)
+	UnitRoutes(business, unitCtrl)
 	JournalBookRoutes(business, journalBookCtrl)
 	JournalRoutes(business, journalCtrl)
 	ReportRoutes(business, reportCtrl)

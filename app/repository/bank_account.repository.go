@@ -120,6 +120,12 @@ func (r *BankAccountRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginati
 }
 
 func (r *BankAccountRepository) Delete(companyID, id string) error {
+	if _, err := r.FindByID(companyID, id); err != nil {
+		return err
+	}
+	if err := checkBankAccountUnused(r.db, companyID, id); err != nil {
+		return err
+	}
 	res := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.BankAccount{})
 	if res.Error != nil {
 		return fmt.Errorf("delete bank account %s: %w", id, res.Error)

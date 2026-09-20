@@ -31,3 +31,16 @@ func (s *GoodsReceiptService) Get(companyID, id string) (*model.GoodsReceipt, er
 func (s *GoodsReceiptService) List(f *domain.Filter) (*utils.OffsetPaginationResult, error) {
 	return s.repo.FindAll(f)
 }
+
+func (s *GoodsReceiptService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.GoodsReceipt, error) {
+	ok, err := s.repo.MitraExists(companyID, dto.MitraID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, &domain.ErrValidation{Message: "partner not found"}
+	}
+	return s.repo.Update(companyID, id, dto, actorID)
+}
+
+func (s *GoodsReceiptService) Delete(companyID, id string) error { return s.repo.Delete(companyID, id) }

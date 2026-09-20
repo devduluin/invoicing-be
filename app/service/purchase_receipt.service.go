@@ -38,3 +38,22 @@ func (s *PurchaseReceiptService) List(f *domain.Filter) (*utils.OffsetPagination
 func (s *PurchaseReceiptService) PreviewNumber(companyID string) (string, error) {
 	return s.repo.PreviewNumber(companyID)
 }
+
+func (s *PurchaseReceiptService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.PurchaseReceipt, error) {
+	if !model.IsValidPurchaseReceiptPaymentMethod(dto.PaymentMethod) {
+		return nil, &domain.ErrValidation{Message: "invalid payment method"}
+	}
+	ok, err := s.repo.MitraExists(companyID, dto.MitraID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, &domain.ErrValidation{Message: "partner not found"}
+	}
+	dto.CompanyID = companyID
+	return s.repo.Update(companyID, id, dto, actorID)
+}
+
+func (s *PurchaseReceiptService) Delete(companyID, id string) error {
+	return s.repo.Delete(companyID, id)
+}

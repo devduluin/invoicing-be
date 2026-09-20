@@ -10,15 +10,19 @@ type defaultsSeeder interface {
 type MasterDefaultsService struct {
 	accounts defaultsSeeder
 	taxes    defaultsSeeder
+	units    defaultsSeeder
 }
 
-func NewMasterDefaultsService(accounts, taxes defaultsSeeder) *MasterDefaultsService {
-	return &MasterDefaultsService{accounts: accounts, taxes: taxes}
+func NewMasterDefaultsService(accounts, taxes, units defaultsSeeder) *MasterDefaultsService {
+	return &MasterDefaultsService{accounts: accounts, taxes: taxes, units: units}
 }
 
 func (s *MasterDefaultsService) SeedCompanyDefaults(companyID, actorID string) error {
 	if err := s.accounts.SeedDefaults(companyID, actorID); err != nil {
 		return err
 	}
-	return s.taxes.SeedDefaults(companyID, actorID)
+	if err := s.taxes.SeedDefaults(companyID, actorID); err != nil {
+		return err
+	}
+	return s.units.SeedDefaults(companyID, actorID)
 }

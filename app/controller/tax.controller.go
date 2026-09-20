@@ -77,6 +77,10 @@ func (ctrl *TaxController) Delete(c *fiber.Ctx) error {
 }
 
 func taxErr(c *fiber.Ctx, err error) error {
+	var refd *utils.ErrInUse
+	if errors.As(err, &refd) {
+		return utils.InUse(c, refd.Message)
+	}
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {
 		return utils.NotFound(c, []string{err.Error()})

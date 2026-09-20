@@ -91,6 +91,10 @@ func (ctrl *MitraController) Delete(c *fiber.Ctx) error {
 }
 
 func handleMitraError(c *fiber.Ctx, err error) error {
+	var inUse *utils.ErrInUse
+	if errors.As(err, &inUse) {
+		return utils.InUse(c, inUse.Message)
+	}
 	var notFound *domain.ErrNotFound
 	if errors.As(err, &notFound) {
 		return utils.NotFound(c, []string{err.Error()})

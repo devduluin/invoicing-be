@@ -1,8 +1,6 @@
 // Package domain_goodsreceipt — "Goods Receipt" (Penerimaan Barang): a
 // standalone physical-receiving log, the AP mirror of Delivery Note. No
-// price/tax, no draft/confirm lifecycle — its seeded permissions
-// (invoice-goods-receipt-list/create only, no update/delete) say a goods
-// receipt is create-once, never edited or deleted through the API.
+// price/tax, no draft/confirm lifecycle. It can be edited and soft-deleted.
 package domain_goodsreceipt
 
 import (
@@ -46,6 +44,10 @@ type CreateDTO struct {
 }
 
 // Filter drives the paginated list query.
+// UpdateDTO is the same shape as CreateDTO (a full replace of header and lines);
+// a blank Number keeps the current one.
+type UpdateDTO = CreateDTO
+
 type Filter struct {
 	CompanyID string
 	Search    string
@@ -61,14 +63,18 @@ type IRepository interface {
 	Create(dto *CreateDTO, actorID string) (*model.GoodsReceipt, error)
 	FindByID(companyID, id string) (*model.GoodsReceipt, error)
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
+	Update(companyID, id string, dto *UpdateDTO, actorID string) (*model.GoodsReceipt, error)
+	Delete(companyID, id string) error
 	MitraExists(companyID, mitraID string) (bool, error)
 }
 
-// IService — no Update/Delete, matching the seeded permissions exactly.
+// IService — Update replaces the whole record; Delete is a soft delete.
 type IService interface {
 	Create(companyID, actorID string, dto *CreateDTO) (*model.GoodsReceipt, error)
 	Get(companyID, id string) (*model.GoodsReceipt, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)
+	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.GoodsReceipt, error)
+	Delete(companyID, id string) error
 }
 
 type ErrNotFound struct{ ID string }

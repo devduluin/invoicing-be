@@ -8,9 +8,8 @@ import (
 )
 
 // GoodsReceipt ("Penerimaan Barang") is a standalone physical-receiving log
-// — the AP mirror of DeliveryNote. No price/tax, no draft/confirm lifecycle
-// (matches its seeded permissions: invoice-goods-receipt-list/create only,
-// no update/delete — a goods receipt is create-once). It optionally
+// — the AP mirror of DeliveryNote. No price/tax, no draft/confirm
+// lifecycle; it can be edited and soft-deleted. It optionally
 // references the PurchaseOrder it fulfills, purely for traceability and to
 // power the frontend's "pre-fill from order" convenience — no quantity-
 // remaining tracking across multiple receipts against one order.

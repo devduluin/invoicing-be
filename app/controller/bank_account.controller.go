@@ -79,6 +79,10 @@ func (ctrl *BankAccountController) Delete(c *fiber.Ctx) error {
 }
 
 func bankAccountErr(c *fiber.Ctx, err error) error {
+	var inUse *utils.ErrInUse
+	if errors.As(err, &inUse) {
+		return utils.InUse(c, inUse.Message)
+	}
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {
 		return utils.NotFound(c, []string{err.Error()})

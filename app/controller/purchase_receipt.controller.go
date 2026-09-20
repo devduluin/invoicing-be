@@ -65,6 +65,28 @@ func (ctrl *PurchaseReceiptController) Create(c *fiber.Ctx) error {
 	return utils.Created(c, row, "Receipt added")
 }
 
+func (ctrl *PurchaseReceiptController) Update(c *fiber.Ctx) error {
+	var dto domain.UpdateDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return utils.BadRequest(c, []string{"Invalid request body"})
+	}
+	if msgs := validation.Struct(&dto); msgs != nil {
+		return utils.ValidationFailed(c, msgs)
+	}
+	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
+	if err != nil {
+		return purchaseReceiptErr(c, err)
+	}
+	return utils.Ok(c, row, "Receipt updated")
+}
+
+func (ctrl *PurchaseReceiptController) Delete(c *fiber.Ctx) error {
+	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
+		return purchaseReceiptErr(c, err)
+	}
+	return utils.Deleted(c, "Receipt deleted")
+}
+
 func purchaseReceiptErr(c *fiber.Ctx, err error) error {
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {

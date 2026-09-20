@@ -196,6 +196,9 @@ func (r *TaxRepository) Delete(companyID, id string) error {
 			return &domain.ErrComponentInUse{}
 		}
 	}
+	if err := checkTaxUnused(r.db, companyID, id); err != nil {
+		return err
+	}
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.Tax{}).Error; err != nil {
 		return fmt.Errorf("delete tax %s: %w", id, err)
 	}

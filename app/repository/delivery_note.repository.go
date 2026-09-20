@@ -54,9 +54,10 @@ func (r *DeliveryNoteRepository) Create(dto *domain.CreateDTO, actorID string) (
 			CompanyID:      dto.CompanyID,
 			MitraID:        dto.MitraID,
 			SalesOrderID:   trimPtr(dto.SalesOrderID),
+			SalesInvoiceID: trimPtr(dto.SalesInvoiceID),
 			Number:         n,
 			Date:           date,
-			Notes:          strings.TrimSpace(dto.Notes),
+			Notes:          utils.SanitizeRichText(dto.Notes),
 			ShippingMethod: strings.TrimSpace(dto.ShippingMethod),
 			TrackingNo:     strings.TrimSpace(dto.TrackingNo),
 			VehicleNo:      strings.TrimSpace(dto.VehicleNo),
@@ -184,4 +185,83 @@ func buildDeliveryNoteLines(lines []domain.LineDTO, companyID, noteID string) []
 		})
 	}
 	return out
+}
+
+func (r *DeliveryNoteRepository) numberExistsExcept(companyID, number, exceptID string) (bool, error) {
+	var n int64
+	err := r.db.Model(&model.DeliveryNote{}).
+		Where("company_id = ? AND lower(number) = lower(?) AND id <> ?", companyID, number, exceptID).Count(&n).Error
+	if err != nil {
+		return false, fmt.Errorf("check delivery note number: %w", err)
+	}
+	return n > 0, nil
+}
+
+// Update replaces the header and the lines. A blank Number keeps the current one.
+func (r *DeliveryNoteRepository) Update(companyID, id string, dto *domain.UpdateDTO, actorID string) (*model.DeliveryNote, error) {
+	existing, err := r.FindByID(companyID, id)
+	if err != nil {
+		return nil, err
+	}
+	date, err := time.Parse("2006-01-02", strings.TrimSpace(dto.Date))
+	if err != nil {
+		return nil, &domain.ErrValidation{Message: "invalid date (format YYYY-MM-DD)"}
+	}
+	number := strings.TrimSpace(dto.Number)
+	if number == "" {
+		number = existing.Number
+	}
+	if !strings.EqualFold(number, existing.Number) {
+		if taken, err := r.numberExistsExcept(companyID, number, id); err != nil {
+			return nil, err
+		} else if taken {
+			return nil, &domain.ErrNumberExists{Number: number}
+		}
+	}
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"mitra_id":         dto.MitraID,
+			"sales_order_id":   trimPtr(dto.SalesOrderID),
+			"sales_invoice_id": trimPtr(dto.SalesInvoiceID),
+			"number":           number,
+			"date":             date,
+			"notes":            utils.SanitizeRichText(dto.Notes),
+			"shipping_method":  strings.TrimSpace(dto.ShippingMethod),
+			"tracking_no":      strings.TrimSpace(dto.TrackingNo),
+			"vehicle_no":       strings.TrimSpace(dto.VehicleNo),
+			"driver_name":      strings.TrimSpace(dto.DriverName),
+			"total_weight":     dto.TotalWeight,
+			"attachment_data":  dto.AttachmentData,
+			"attachment_name":  strings.TrimSpace(dto.AttachmentName),
+			"updated_at":       time.Now(),
+			"updated_by":       actorID,
+		}
+		if err := tx.Model(&model.DeliveryNote{}).Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update delivery note %s: %w", id, err)
+		}
+		if err := tx.Where("delivery_note_id = ?", id).Delete(&model.DeliveryNoteLine{}).Error; err != nil {
+			return fmt.Errorf("replace delivery note lines %s: %w", id, err)
+		}
+		lines := buildDeliveryNoteLines(dto.Lines, companyID, id)
+		if err := tx.Create(&lines).Error; err != nil {
+			return fmt.Errorf("create delivery note lines: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.FindByID(companyID, id)
+}
+
+// Delete soft-deletes the record only; its lines are kept so it stays auditable.
+func (r *DeliveryNoteRepository) Delete(companyID, id string) error {
+	if _, err := r.FindByID(companyID, id); err != nil {
+		return err
+	}
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.DeliveryNote{}).Error; err != nil {
+		return fmt.Errorf("delete delivery note %s: %w", id, err)
+	}
+	return nil
 }

@@ -19,21 +19,31 @@ func NewSalesInvoiceController(svc domain.IService) *SalesInvoiceController {
 
 func (ctrl *SalesInvoiceController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
-		CompanyID: middlewares.GetCompanyID(c),
-		Kind:      c.Query("kind"),
-		Search:    c.Query("search"),
-		MitraID:   c.Query("mitra_id"),
-		Status:    c.Query("status"),
-		Page:      c.QueryInt("page", 1),
-		PageSize:  c.QueryInt("limit", 20),
-		Sort:      c.Query("sort"),
-		Order:     c.Query("order"),
-		Fields:    utils.ParseCSVParam(c.Query("fields")),
+		CompanyID:     middlewares.GetCompanyID(c),
+		Kind:          c.Query("kind"),
+		Search:        c.Query("search"),
+		MitraID:       c.Query("mitra_id"),
+		Status:        c.Query("status"),
+		PaymentStatus: c.Query("payment_status"),
+		Overdue:       c.Query("overdue") == "true",
+		Page:          c.QueryInt("page", 1),
+		PageSize:      c.QueryInt("limit", 20),
+		Sort:          c.Query("sort"),
+		Order:         c.Query("order"),
+		Fields:        utils.ParseCSVParam(c.Query("fields")),
 	})
 	if err != nil {
 		return utils.InternalError(c, err)
 	}
 	return utils.List(c, res, "OK")
+}
+
+func (ctrl *SalesInvoiceController) Summary(c *fiber.Ctx) error {
+	res, err := ctrl.svc.Summary(middlewares.GetCompanyID(c))
+	if err != nil {
+		return utils.InternalError(c, err)
+	}
+	return utils.Ok(c, res, "OK")
 }
 
 func (ctrl *SalesInvoiceController) PreviewNumber(c *fiber.Ctx) error {
@@ -115,6 +125,10 @@ func (ctrl *SalesInvoiceController) Cancel(c *fiber.Ctx) error {
 }
 
 func salesInvoiceErr(c *fiber.Ctx, err error) error {
+	var inUse *utils.ErrInUse
+	if errors.As(err, &inUse) {
+		return utils.InUse(c, inUse.Message)
+	}
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {
 		return utils.NotFound(c, []string{err.Error()})

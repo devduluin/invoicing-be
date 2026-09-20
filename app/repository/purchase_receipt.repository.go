@@ -52,7 +52,7 @@ func (r *PurchaseReceiptRepository) Create(dto *domain.CreateDTO, actorID string
 		Amount:            dto.Amount,
 		PaymentMethod:     model.PurchaseReceiptPaymentMethod(dto.PaymentMethod),
 		BankAccountID:     trimPtr(dto.BankAccountID),
-		Notes:             strings.TrimSpace(dto.Notes),
+		Notes:             utils.SanitizeRichText(dto.Notes),
 		CreatedBy:         actorID,
 		UpdatedBy:         actorID,
 	}
@@ -147,4 +147,57 @@ func generatePurchaseReceiptNumber(db *gorm.DB, companyID string, date time.Time
 // now — a preview for the Add page, not a reservation.
 func (r *PurchaseReceiptRepository) PreviewNumber(companyID string) (string, error) {
 	return generatePurchaseReceiptNumber(r.db, companyID, time.Now())
+}
+
+// Update replaces the receipt's fields. A blank Number keeps the current one.
+func (r *PurchaseReceiptRepository) Update(companyID, id string, dto *domain.UpdateDTO, actorID string) (*model.PurchaseReceipt, error) {
+	existing, err := r.FindByID(companyID, id)
+	if err != nil {
+		return nil, err
+	}
+	date, err := time.Parse("2006-01-02", strings.TrimSpace(dto.Date))
+	if err != nil {
+		return nil, &domain.ErrValidation{Message: "invalid date (format YYYY-MM-DD)"}
+	}
+	number := strings.TrimSpace(dto.Number)
+	if number == "" {
+		number = existing.Number
+	}
+	if !strings.EqualFold(number, existing.Number) {
+		var n int64
+		if err := r.db.Model(&model.PurchaseReceipt{}).
+			Where("company_id = ? AND lower(number) = lower(?) AND id <> ?", companyID, number, id).Count(&n).Error; err != nil {
+			return nil, fmt.Errorf("check purchase receipt number: %w", err)
+		}
+		if n > 0 {
+			return nil, &domain.ErrNumberExists{Number: number}
+		}
+	}
+	err = r.db.Model(&model.PurchaseReceipt{}).Where("id = ? AND company_id = ?", id, companyID).Updates(map[string]any{
+		"mitra_id":            dto.MitraID,
+		"purchase_invoice_id": trimPtr(dto.PurchaseInvoiceID),
+		"number":              number,
+		"date":                date,
+		"amount":              dto.Amount,
+		"payment_method":      dto.PaymentMethod,
+		"bank_account_id":     trimPtr(dto.BankAccountID),
+		"notes":               utils.SanitizeRichText(dto.Notes),
+		"updated_at":          time.Now(),
+		"updated_by":          actorID,
+	}).Error
+	if err != nil {
+		return nil, fmt.Errorf("update purchase receipt %s: %w", id, err)
+	}
+	return r.FindByID(companyID, id)
+}
+
+// Delete is a soft delete.
+func (r *PurchaseReceiptRepository) Delete(companyID, id string) error {
+	if _, err := r.FindByID(companyID, id); err != nil {
+		return err
+	}
+	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseReceipt{}).Error; err != nil {
+		return fmt.Errorf("delete purchase receipt %s: %w", id, err)
+	}
+	return nil
 }

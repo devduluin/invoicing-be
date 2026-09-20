@@ -23,6 +23,7 @@ func SetupAppMiddleware(app *fiber.App) {
 		AllowOrigins:     resolveAllowOrigins(),
 		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Account-Type,X-Company-ID,x-callback-token,X-Request-ID",
+		ExposeHeaders:    "X-Reissued-Token",
 		AllowCredentials: config.AppConfig.CORSAllowedOrigins != "*",
 	}))
 }

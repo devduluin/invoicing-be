@@ -32,6 +32,9 @@ func (f *fakeSalesInvoiceRepo) FindByID(companyID, id string) (*model.SalesInvoi
 func (f *fakeSalesInvoiceRepo) FindAll(fl *domain.Filter) (*utils.OffsetPaginationResult, error) {
 	return nil, nil
 }
+func (f *fakeSalesInvoiceRepo) Summary(companyID string) (*domain.Summary, error) {
+	return &domain.Summary{}, nil
+}
 func (f *fakeSalesInvoiceRepo) Delete(companyID, id string) error { return nil }
 func (f *fakeSalesInvoiceRepo) SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error {
 	if f.invoice != nil {
