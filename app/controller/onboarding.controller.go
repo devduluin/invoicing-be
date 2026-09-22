@@ -92,6 +92,10 @@ func handleMembershipError(c *fiber.Ctx, err error) error {
 	if errors.As(err, &noMembership) {
 		return utils.Forbidden(c, []string{err.Error()})
 	}
+	var ssoDown *membership.ErrSSOUnavailable
+	if errors.As(err, &ssoDown) {
+		return utils.ServiceUnavailable(c, []string{err.Error()})
+	}
 	var companyNF *membership.ErrCompanyNotFound
 	if errors.As(err, &companyNF) {
 		return utils.NotFound(c, []string{err.Error()})

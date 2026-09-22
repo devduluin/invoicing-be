@@ -271,6 +271,8 @@ type fakeSSO struct {
 	getPermsCalls  int
 	failGetPerms   error
 	tempThenOK     bool
+	users          map[string]sso.UserInfo // SSO user-validation by lower-case email
+	validateErr    error
 }
 
 func newFakeSSO() *fakeSSO {
@@ -356,4 +358,39 @@ func (f *fakeCache) DelByPattern(_ context.Context, pattern string) {
 			delete(f.data, k)
 		}
 	}
+}
+
+func (f *fakeMembershipRepo) ListByEmailInCompanies(emails, companyIDs []string) ([]model.UserAccountSSO, error) {
+	f.hit("ListByEmailInCompanies")
+	var out []model.UserAccountSSO
+	for _, r := range f.rows {
+		if r.DeletedAt.Valid {
+			continue
+		}
+		for _, e := range emails {
+			for _, c := range companyIDs {
+				if strings.EqualFold(r.Email, e) && r.CompanyID == c {
+					out = append(out, *r)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMembershipRepo) FindAnyByEmail(email string) (*model.UserAccountSSO, error) {
+	f.hit("FindAnyByEmail")
+	for _, r := range f.rows {
+		if !r.DeletedAt.Valid && strings.EqualFold(r.Email, email) {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeSSO) ValidateUser(_ context.Context, email string) (sso.UserInfo, error) {
+	if f.validateErr != nil {
+		return sso.UserInfo{}, f.validateErr
+	}
+	return f.users[strings.ToLower(email)], nil
 }

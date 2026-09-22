@@ -19,14 +19,15 @@ func NewPurchaseReceiptController(svc domain.IService) *PurchaseReceiptControlle
 
 func (ctrl *PurchaseReceiptController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
-		CompanyID: middlewares.GetCompanyID(c),
-		Search:    c.Query("search"),
-		MitraID:   c.Query("mitra_id"),
-		Page:      c.QueryInt("page", 1),
-		PageSize:  c.QueryInt("limit", 20),
-		Sort:      c.Query("sort"),
-		Order:     c.Query("order"),
-		Fields:    utils.ParseCSVParam(c.Query("fields")),
+		CompanyID:         middlewares.GetCompanyID(c),
+		Search:            c.Query("search"),
+		MitraID:           c.Query("mitra_id"),
+		PurchaseInvoiceID: c.Query("purchase_invoice_id"),
+		Page:              c.QueryInt("page", 1),
+		PageSize:          c.QueryInt("limit", 20),
+		Sort:              c.Query("sort"),
+		Order:             c.Query("order"),
+		Fields:            utils.ParseCSVParam(c.Query("fields")),
 	})
 	if err != nil {
 		return utils.InternalError(c, err)
@@ -95,6 +96,10 @@ func purchaseReceiptErr(c *fiber.Ctx, err error) error {
 	var dup *domain.ErrNumberExists
 	if errors.As(err, &dup) {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"success": false, "message": err.Error(), "error_code": "number_exists"})
+	}
+	var bal *domain.ErrExceedsBalance
+	if errors.As(err, &bal) {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"success": false, "message": err.Error(), "error_code": "exceeds_balance"})
 	}
 	var v *domain.ErrValidation
 	if errors.As(err, &v) {

@@ -1,5 +1,7 @@
 package domain_mitra
 
+import contactdomain "duluin_invoice/app/domain/contactperson"
+
 // CreateMitraDTO is the create payload for a Mitra (PRD §8).
 type CreateMitraDTO struct {
 	CompanyID   string `json:"-"`
@@ -11,6 +13,10 @@ type CreateMitraDTO struct {
 	Npwp        string `json:"npwp" validate:"omitempty,max=50"`
 	Address     string `json:"address" validate:"omitempty"`
 	IsActive    *bool  `json:"is_active"`
+	// ContactPersons are saved together with the partner, in the same transaction.
+	ContactPersons []contactdomain.SyncInput `json:"contact_persons" validate:"omitempty,max=50,dive"`
+	// ContactPerms is filled by the controller from the caller's permissions (never from the body).
+	ContactPerms contactdomain.Perms `json:"-"`
 }
 
 // UpdateMitraDTO — all fields optional; only provided keys are applied.
@@ -23,6 +29,12 @@ type UpdateMitraDTO struct {
 	Npwp        string  `json:"npwp" validate:"omitempty,max=50"`
 	Address     *string `json:"address"`
 	IsActive    *bool   `json:"is_active"`
+	// ContactPersons: nil = leave the partner's contacts alone; a list (even empty) makes the
+	// partner's contacts EXACTLY that list (rows with an id are updated, without an id created,
+	// missing ones deleted).
+	ContactPersons []contactdomain.SyncInput `json:"contact_persons" validate:"omitempty,max=50,dive"`
+	// ContactPerms is filled by the controller from the caller's permissions (never from the body).
+	ContactPerms contactdomain.Perms `json:"-"`
 }
 
 // MitraFilter drives the list query.

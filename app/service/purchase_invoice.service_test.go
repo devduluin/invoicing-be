@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	domain "duluin_invoice/app/domain/purchaseinvoice"
 	"duluin_invoice/app/model"
@@ -33,6 +34,12 @@ func (f *fakePurchaseInvoiceRepo) FindAll(fl *domain.Filter) (*utils.OffsetPagin
 	return nil, nil
 }
 func (f *fakePurchaseInvoiceRepo) Delete(companyID, id string) error { return nil }
+func (f *fakePurchaseInvoiceRepo) SetTemplate(companyID, id, actorID, template string) error {
+	return nil
+}
+func (f *fakePurchaseInvoiceRepo) Summary(companyID string) (*domain.Summary, error) {
+	return &domain.Summary{}, nil
+}
 func (f *fakePurchaseInvoiceRepo) SetStatus(companyID, id, actorID string, status model.PurchaseInvoiceStatus) error {
 	if f.invoice != nil {
 		f.invoice.Status = status
@@ -114,30 +121,33 @@ func TestPurchaseInvoiceStatusTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("update rejected once confirmed", func(t *testing.T) {
+	t.Run("update allowed once confirmed", func(t *testing.T) {
 		repo := &fakePurchaseInvoiceRepo{invoice: newInvoice(model.PurchaseInvoiceStatusConfirmed), mitraExists: true}
 		svc := &PurchaseInvoiceService{repo: repo}
 		_, err := svc.Update("c1", "actor", "bill-1", &domain.UpdateDTO{
 			MitraID: "m1", Date: "2026-01-01",
 			Lines: []domain.LineDTO{piLine("A", 1, 1000)},
 		})
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 
-	t.Run("delete rejected once confirmed", func(t *testing.T) {
+	t.Run("delete allowed once confirmed", func(t *testing.T) {
 		repo := &fakePurchaseInvoiceRepo{invoice: newInvoice(model.PurchaseInvoiceStatusConfirmed)}
 		svc := &PurchaseInvoiceService{repo: repo}
 		err := svc.Delete("c1", "bill-1")
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 }
 
 func (f *fakePurchaseInvoiceRepo) PreviewNumber(companyID string) (string, error) {
 	return "BILL/2026/0001", nil
+}
+
+func (f *fakePurchaseInvoiceRepo) CountAll(companyID string) (int64, error) { return 0, nil }
+func (f *fakePurchaseInvoiceRepo) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	return 0, nil
 }

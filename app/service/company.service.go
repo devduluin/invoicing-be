@@ -72,6 +72,9 @@ func (s *CompanyService) UpdateProfile(a domain.Actor, dto domain.UpdateProfileD
 	applyString(&company.Kota, dto.Kota, false)
 	applyString(&company.Provinsi, dto.Provinsi, false)
 	applyString(&company.KodePos, dto.KodePos, false)
+	applyString(&company.Website, dto.Website, false)
+	applyString(&company.JenisUsaha, dto.JenisUsaha, false)
+	applyString(&company.JumlahKaryawan, dto.JumlahKaryawan, false)
 	company.UpdatedBy = a.UserID
 
 	if err := s.repo.SaveCompany(company); err != nil {

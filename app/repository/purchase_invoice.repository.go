@@ -17,7 +17,7 @@ import (
 
 // purchaseInvoiceListColumns — fields the MasterTable may show / sort by.
 var purchaseInvoiceListColumns = []string{
-	"number", "date", "due_date", "status", "mitra_id", "grand_total", "created_at",
+	"number", "date", "due_date", "status", "payment_status", "mitra_id", "grand_total", "paid_amount", "created_at",
 }
 
 type PurchaseInvoiceRepository struct{ db *gorm.DB }
@@ -82,9 +82,18 @@ func (r *PurchaseInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Li
 			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
 			SignatureData:            dto.SignatureData,
 			StampDuty:                dto.StampDuty,
+			Template:                 templateForDoc(tx, dto.CompanyID, "purchase_invoice", dto.Template),
 			CreatedBy:                actorID,
 			UpdatedBy:                actorID,
 		}
+		snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
+		if err != nil {
+			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
 		if err := tx.Create(invoice).Error; err != nil {
 			return fmt.Errorf("create purchase invoice: %w", err)
 		}
@@ -162,11 +171,33 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 			"updated_at":                 time.Now(),
 			"updated_by":                 actorID,
 		}
+		if t := strings.TrimSpace(dto.Template); t != "" {
+			updates["template"] = t
+		}
+		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
+		if err != nil {
+			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		if !snap.Keep {
+			updates["contact_person_id"] = snap.ID
+			updates["contact_name"] = snap.Name
+			updates["contact_position"] = snap.Position
+			updates["contact_phone"] = snap.Phone
+			updates["contact_email"] = snap.Email
+		}
+
 		if err := tx.Model(&model.PurchaseInvoice{}).
 			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update purchase invoice %s: %w", id, err)
 		}
 		if err := deletePurchaseInvoiceLineTaxes(tx, id); err != nil {
+			return err
+		}
+		// The total may have changed: paid stays as recorded, so re-derive the payment status.
+		if err := refreshPurchaseInvoicePaymentStatus(tx, companyID, id); err != nil {
 			return err
 		}
 		if err := tx.Where("purchase_invoice_id = ?", id).Delete(&model.PurchaseInvoiceLine{}).Error; err != nil {
@@ -221,6 +252,13 @@ func (r *PurchaseInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)
 	}
+	if f.PaymentStatus != "" {
+		q = q.Where("payment_status IN ?", strings.Split(f.PaymentStatus, ","))
+	}
+	if f.Overdue {
+		q = q.Where("status = ? AND payment_status <> ? AND due_date IS NOT NULL AND due_date < ?",
+			model.PurchaseInvoiceStatusConfirmed, model.PurchaseInvoicePaymentPaid, time.Now().Format("2006-01-02"))
+	}
 
 	sortCol := utils.NormalizeSort(f.Sort, purchaseInvoiceListColumns, "date")
 	order := f.Order
@@ -246,6 +284,7 @@ func (r *PurchaseInvoiceRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
+	// Soft delete (deleted_at). Payments (purchase receipts) keep their own records.
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseInvoice{}).Error; err != nil {
 		return fmt.Errorf("delete purchase invoice %s: %w", id, err)
 	}
@@ -253,6 +292,12 @@ func (r *PurchaseInvoiceRepository) Delete(companyID, id string) error {
 }
 
 func (r *PurchaseInvoiceRepository) SetStatus(companyID, id, actorID string, status model.PurchaseInvoiceStatus) error {
+	// Reverting to draft or cancelling would strand the money already paid against it.
+	if status == model.PurchaseInvoiceStatusDraft || status == model.PurchaseInvoiceStatusCancelled {
+		if err := checkPurchaseInvoiceHasNoPayments(r.db, companyID, id); err != nil {
+			return err
+		}
+	}
 	res := r.db.Model(&model.PurchaseInvoice{}).Where("id = ? AND company_id = ?", id, companyID).
 		Updates(map[string]any{"status": status, "updated_at": time.Now(), "updated_by": actorID})
 	if res.Error != nil {
@@ -432,4 +477,98 @@ func parseOptionalPurchaseInvoiceDate(s string) (*time.Time, error) {
 // now — a preview for the Add page, not a reservation.
 func (r *PurchaseInvoiceRepository) PreviewNumber(companyID string) (string, error) {
 	return generatePurchaseInvoiceNumber(r.db, companyID, time.Now())
+}
+
+// checkPurchaseInvoiceHasNoPayments blocks reverting/cancelling/deleting a bill while payments
+// (purchase receipts) are applied to it. Delete those payments first.
+func checkPurchaseInvoiceHasNoPayments(db *gorm.DB, companyID, invoiceID string) error {
+	total, summary, err := countRefs(db, []refQuery{
+		directRefs("purchase_receipts", "purchase_invoice_id", "payment(s)", companyID, invoiceID),
+	})
+	if err != nil {
+		return err
+	}
+	if total > 0 {
+		return &utils.ErrInUse{Message: fmt.Sprintf("This purchase invoice already has %s applied. Delete them first.", summary)}
+	}
+	return nil
+}
+
+// SetTemplate changes ONLY the layout of an existing document. Allowed in any status: it is
+// presentation, so it never touches lines, totals or the document lifecycle.
+func (r *PurchaseInvoiceRepository) SetTemplate(companyID, id, actorID, template string) error {
+	res := r.db.Model(&model.PurchaseInvoice{}).Where("id = ? AND company_id = ?", id, companyID).
+		Updates(map[string]any{"template": template, "updated_at": time.Now(), "updated_by": actorID})
+	if res.Error != nil {
+		return fmt.Errorf("set purchase invoice template %s: %w", id, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return &domain.ErrNotFound{ID: id}
+	}
+	return nil
+}
+
+// Summary — dashboard figures for this company's purchase invoices. It reads the SAME columns the
+// list and the detail page use (status, payment_status, paid_amount, grand_total, due_date), so the
+// dashboard can never disagree with them. Soft-deleted rows are excluded by the model scope, and
+// cancelled ones by the status filters.
+func (r *PurchaseInvoiceRepository) Summary(companyID string) (*domain.Summary, error) {
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+
+	base := func() *gorm.DB {
+		return r.db.Model(&model.PurchaseInvoice{}).Where("company_id = ?", companyID)
+	}
+	figure := func(q *gorm.DB, expr string) (domain.SummaryFigure, error) {
+		var row struct {
+			Amount float64
+			Count  int64
+		}
+		if err := q.Select("COALESCE(SUM(" + expr + "), 0) AS amount, COUNT(*) AS count").Scan(&row).Error; err != nil {
+			return domain.SummaryFigure{}, err
+		}
+		return domain.SummaryFigure{Amount: round2(row.Amount), Count: row.Count}, nil
+	}
+	owed := func() *gorm.DB {
+		return base().Where("status = ? AND payment_status <> ?", model.PurchaseInvoiceStatusConfirmed, model.PurchaseInvoicePaymentPaid)
+	}
+
+	out := &domain.Summary{}
+	var err error
+	if out.Outstanding, err = figure(owed(), "GREATEST(grand_total - paid_amount, 0)"); err != nil {
+		return nil, fmt.Errorf("purchase summary outstanding: %w", err)
+	}
+	if out.Overdue, err = figure(owed().Where("due_date IS NOT NULL AND due_date < ?", today), "GREATEST(grand_total - paid_amount, 0)"); err != nil {
+		return nil, fmt.Errorf("purchase summary overdue: %w", err)
+	}
+	if out.ThisMonth, err = figure(base().Where("status = ? AND date >= ?", model.PurchaseInvoiceStatusConfirmed, monthStart), "grand_total"); err != nil {
+		return nil, fmt.Errorf("purchase summary this month: %w", err)
+	}
+	if err := base().Where("status = ?", model.PurchaseInvoiceStatusDraft).Count(&out.Drafts).Error; err != nil {
+		return nil, fmt.Errorf("purchase summary drafts: %w", err)
+	}
+	return out, nil
+}
+
+// CountAll — how many purchase invoices the company has created, ever. Used by the activation
+// milestone ("1 Invoice" — Sales Invoice or Purchase Invoice).
+func (r *PurchaseInvoiceRepository) CountAll(companyID string) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.PurchaseInvoice{}).Where("company_id = ?", companyID).Count(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("count purchase invoices: %w", err)
+	}
+	return n, nil
+}
+
+// CountCreatedSince — every purchase invoice created on or after `since`. Used for the Free-tier
+// transactions/month limit.
+func (r *PurchaseInvoiceRepository) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.PurchaseInvoice{}).Where("company_id = ? AND created_at >= ?", companyID, since).Count(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("count purchase invoices since: %w", err)
+	}
+	return n, nil
 }

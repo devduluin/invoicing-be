@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	contactdomain "duluin_invoice/app/domain/contactperson"
 	domain "duluin_invoice/app/domain/mitra"
 	"duluin_invoice/app/model"
 	"duluin_invoice/utils"
@@ -53,8 +54,19 @@ func (r *MitraRepository) Create(dto *domain.CreateMitraDTO, actorID string) (*m
 	if dto.IsActive != nil {
 		mitra.IsActive = utils.BoolInt(*dto.IsActive)
 	}
-	if err := r.db.Create(mitra).Error; err != nil {
-		return nil, fmt.Errorf("create mitra: %w", err)
+	// The partner and its contact persons are saved together or not at all.
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(mitra).Error; err != nil {
+			return fmt.Errorf("create mitra: %w", err)
+		}
+		if len(dto.ContactPersons) == 0 {
+			return nil
+		}
+		// creating a partner already needs invoice-mitra-create; the contacts need the contact permission
+		return syncContacts(tx, dto.CompanyID, mitra.ID, actorID, dto.ContactPersons, contactdomain.Perms{Create: dto.ContactPerms.Create})
+	})
+	if err != nil {
+		return nil, mapContactErr(err)
 	}
 	return r.FindByID(dto.CompanyID, mitra.ID)
 }
@@ -66,10 +78,24 @@ func (r *MitraRepository) Update(companyID, id string, dto *domain.UpdateMitraDT
 	}
 
 	updates := mitraUpdateMap(dto, actorID)
-	if err := r.db.Model(&model.Mitra{}).
-		Where("id = ? AND company_id = ?", id, companyID).
-		Updates(updates).Error; err != nil {
-		return nil, fmt.Errorf("update mitra %s: %w", id, err)
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if dto.ContactPersons != nil {
+			if err := lockMitra(tx, companyID, id); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&model.Mitra{}).
+			Where("id = ? AND company_id = ?", id, companyID).
+			Updates(updates).Error; err != nil {
+			return fmt.Errorf("update mitra %s: %w", id, err)
+		}
+		if dto.ContactPersons != nil {
+			return syncContacts(tx, companyID, id, actorID, dto.ContactPersons, dto.ContactPerms)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, mapContactErr(err)
 	}
 	return r.FindByID(companyID, id)
 }
@@ -173,4 +199,26 @@ func (r *MitraRepository) Delete(companyID, id string) error {
 		return &domain.ErrNotFound{ID: id}
 	}
 	return nil
+}
+
+// mapContactErr turns contact-person errors raised while saving a partner into the partner
+// domain's own validation error (permission errors stay as they are, so the controller answers 403).
+func mapContactErr(err error) error {
+	var v *contactdomain.ErrValidation
+	var d *contactdomain.ErrDuplicate
+	var n *contactdomain.ErrNotFound
+	if errors.As(err, &v) || errors.As(err, &d) || errors.As(err, &n) {
+		return &domain.ErrValidation{Message: err.Error()}
+	}
+	return err
+}
+
+// CountActive — how many partners this company has (soft-deleted rows excluded by GORM by
+// default). Used by the activation milestone and the Free-tier partner limit.
+func (r *MitraRepository) CountActive(companyID string) (int64, error) {
+	var n int64
+	if err := r.db.Model(&model.Mitra{}).Where("company_id = ?", companyID).Count(&n).Error; err != nil {
+		return 0, fmt.Errorf("count partners: %w", err)
+	}
+	return n, nil
 }

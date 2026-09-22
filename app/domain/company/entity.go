@@ -30,6 +30,15 @@ type UpdateProfileDTO struct {
 	Kota        *string `json:"kota"         validate:"omitempty,max=100"`
 	Provinsi    *string `json:"provinsi"     validate:"omitempty,max=100"`
 	KodePos     *string `json:"kode_pos"     validate:"omitempty,max=10"`
+	Website     *string `json:"website"      validate:"omitempty,max=255"`
+
+	// JenisUsaha (industry) and JumlahKaryawan (company size) are required for the Free-plan
+	// activation checklist's "company profile completed" step (see companyProfileComplete in
+	// app/service/activation.service.go). They are set at onboarding but must also be editable
+	// here, since a company created before this requirement — or one that never went through the
+	// wizard — would otherwise have no way to complete this step.
+	JenisUsaha     *string `json:"jenis_usaha"     validate:"omitempty,max=120"`
+	JumlahKaryawan *string `json:"jumlah_karyawan" validate:"omitempty,max=20"`
 }
 
 // ICompanyService is the application port used by the HTTP layer.

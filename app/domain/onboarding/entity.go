@@ -41,12 +41,14 @@ type SubmitDTO struct {
 	JenisUsaha     string `json:"jenis_usaha"     validate:"required,max=120"`
 	JumlahKaryawan string `json:"jumlah_karyawan" validate:"required,max=20"`
 	Telepon        string `json:"telepon"         validate:"required,max=40"`
-	Email          string `json:"email"           validate:"omitempty,email,max=150"`
-	Alamat         string `json:"alamat"          validate:"omitempty,max=255"`
-	Kota           string `json:"kota"            validate:"omitempty,max=100"`
-	Provinsi       string `json:"provinsi"        validate:"omitempty,max=100"`
-	KodePos        string `json:"kode_pos"        validate:"omitempty,max=10"`
-	Npwp           string `json:"npwp"            validate:"omitempty,max=30"`
+	// Email is required (Free-plan activation's "Company profile completed" step needs it — see
+	// app/service/activation.service.go companyProfileComplete). NPWP below stays optional.
+	Email    string `json:"email" validate:"required,email,max=150"`
+	Alamat   string `json:"alamat"          validate:"omitempty,max=255"`
+	Kota     string `json:"kota"            validate:"omitempty,max=100"`
+	Provinsi string `json:"provinsi"        validate:"omitempty,max=100"`
+	KodePos  string `json:"kode_pos"        validate:"omitempty,max=10"`
+	Npwp     string `json:"npwp"            validate:"omitempty,max=30"`
 
 	KebutuhanUser []string       `json:"kebutuhan_user" validate:"required,min=1,max=20,dive,required,max=60"`
 	Invites       []SubmitInvite `json:"invites"        validate:"omitempty,max=9,dive"`

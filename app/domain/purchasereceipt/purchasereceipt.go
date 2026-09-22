@@ -34,11 +34,13 @@ type Filter struct {
 	CompanyID string
 	Search    string
 	MitraID   string
-	Page      int
-	PageSize  int
-	Sort      string
-	Order     string
-	Fields    []string
+	// PurchaseInvoiceID scopes to the payments applied to one bill.
+	PurchaseInvoiceID string
+	Page              int
+	PageSize          int
+	Sort              string
+	Order             string
+	Fields            []string
 }
 
 type IRepository interface {
@@ -74,3 +76,8 @@ type ErrNumberExists struct{ Number string }
 func (e *ErrNumberExists) Error() string {
 	return fmt.Sprintf("receipt no. %s is already in use", e.Number)
 }
+
+// ErrExceedsBalance — the payment would push the linked invoice's PaidAmount past its GrandTotal.
+type ErrExceedsBalance struct{ Message string }
+
+func (e *ErrExceedsBalance) Error() string { return e.Message }

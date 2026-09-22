@@ -6,12 +6,20 @@ import (
 	"duluin_invoice/utils"
 )
 
-type MitraService struct {
-	repo domain.IMitraRepository
+// activationLimiter is the slice of ActivationService this service needs: refuse a new partner past
+// the Free-tier cap, and let a qualifying partner trip the one-way activation flip right away.
+type activationLimiter interface {
+	CheckPartnerLimit(companyID string) error
+	Recompute(companyID string)
 }
 
-func NewMitraService(repo domain.IMitraRepository) domain.IMitraService {
-	return &MitraService{repo: repo}
+type MitraService struct {
+	repo       domain.IMitraRepository
+	activation activationLimiter
+}
+
+func NewMitraService(repo domain.IMitraRepository, activation activationLimiter) domain.IMitraService {
+	return &MitraService{repo: repo, activation: activation}
 }
 
 func (s *MitraService) Create(companyID, actorID string, dto *domain.CreateMitraDTO) (*model.Mitra, error) {
@@ -19,7 +27,15 @@ func (s *MitraService) Create(companyID, actorID string, dto *domain.CreateMitra
 	if !model.IsValidMitraType(dto.Type) {
 		return nil, &domain.ErrValidation{Message: "invalid partner type"}
 	}
-	return s.repo.Create(dto, actorID)
+	if err := s.activation.CheckPartnerLimit(companyID); err != nil {
+		return nil, err
+	}
+	m, err := s.repo.Create(dto, actorID)
+	if err != nil {
+		return nil, err
+	}
+	s.activation.Recompute(companyID)
+	return m, nil
 }
 
 func (s *MitraService) Update(companyID, actorID, id string, dto *domain.UpdateMitraDTO) (*model.Mitra, error) {

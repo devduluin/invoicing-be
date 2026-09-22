@@ -41,6 +41,14 @@ func main() {
 		log.Printf("⚠️  Unit backfill warning: %v", err)
 	}
 
+	if err := repository.RemovePICBackfilledContacts(database.DB); err != nil {
+		log.Printf("⚠️  Contact person cleanup warning: %v", err)
+	}
+
+	if err := repository.BackfillPurchasePayments(database.DB); err != nil {
+		log.Printf("⚠️  Purchase payment backfill warning: %v", err)
+	}
+
 	if err := database.ConnectRedis(); err != nil {
 		log.Printf("Redis startup warning (token cache disabled): %v", err)
 	}

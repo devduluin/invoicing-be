@@ -8,14 +8,20 @@ import (
 	"duluin_invoice/utils"
 )
 
-type PurchaseOrderService struct{ repo domain.IRepository }
+type PurchaseOrderService struct {
+	repo       domain.IRepository
+	activation transactionLimiter
+}
 
-func NewPurchaseOrderService(repo domain.IRepository) domain.IService {
-	return &PurchaseOrderService{repo: repo}
+func NewPurchaseOrderService(repo domain.IRepository, activation transactionLimiter) domain.IService {
+	return &PurchaseOrderService{repo: repo, activation: activation}
 }
 
 func (s *PurchaseOrderService) Create(companyID, actorID string, dto *domain.CreateDTO) (*model.PurchaseOrder, error) {
 	if err := s.checkMitra(companyID, dto.MitraID); err != nil {
+		return nil, err
+	}
+	if err := s.activation.CheckTransactionLimit(companyID); err != nil {
 		return nil, err
 	}
 	calc, err := s.calc(companyID, dto.Lines, dto.AdditionalDiscountType, dto.AdditionalDiscountValue)
@@ -23,16 +29,17 @@ func (s *PurchaseOrderService) Create(companyID, actorID string, dto *domain.Cre
 		return nil, err
 	}
 	dto.CompanyID = companyID
-	return s.repo.Create(dto, calc, actorID)
-}
-
-func (s *PurchaseOrderService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.PurchaseOrder, error) {
-	existing, err := s.repo.FindByID(companyID, id)
+	row, err := s.repo.Create(dto, calc, actorID)
 	if err != nil {
 		return nil, err
 	}
-	if existing.Status != model.PurchaseOrderStatusDraft {
-		return nil, &domain.ErrNotEditable{}
+	s.activation.Recompute(companyID)
+	return row, nil
+}
+
+func (s *PurchaseOrderService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.PurchaseOrder, error) {
+	if _, err := s.repo.FindByID(companyID, id); err != nil {
+		return nil, err
 	}
 	if err := s.checkMitra(companyID, dto.MitraID); err != nil {
 		return nil, err
@@ -53,12 +60,8 @@ func (s *PurchaseOrderService) List(f *domain.Filter) (*utils.OffsetPaginationRe
 }
 
 func (s *PurchaseOrderService) Delete(companyID, id string) error {
-	existing, err := s.repo.FindByID(companyID, id)
-	if err != nil {
+	if _, err := s.repo.FindByID(companyID, id); err != nil {
 		return err
-	}
-	if existing.Status != model.PurchaseOrderStatusDraft {
-		return &domain.ErrNotEditable{}
 	}
 	return s.repo.Delete(companyID, id)
 }
@@ -200,4 +203,15 @@ func (s *PurchaseOrderService) resolveTaxRates(companyID string, lines []domain.
 
 func (s *PurchaseOrderService) PreviewNumber(companyID string) (string, error) {
 	return s.repo.PreviewNumber(companyID)
+}
+
+// SetTemplate changes which layout the document prints with (any status; presentation only).
+func (s *PurchaseOrderService) SetTemplate(companyID, actorID, id, template string) (*model.PurchaseOrder, error) {
+	if !model.IsValidSalesInvoiceTemplate(template) {
+		return nil, &domain.ErrValidation{Message: "unknown template"}
+	}
+	if err := s.repo.SetTemplate(companyID, id, actorID, template); err != nil {
+		return nil, err
+	}
+	return s.repo.FindByID(companyID, id)
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	domain "duluin_invoice/app/domain/salesinvoice"
 	"duluin_invoice/app/model"
@@ -34,6 +35,12 @@ func (f *fakeSalesInvoiceRepo) FindAll(fl *domain.Filter) (*utils.OffsetPaginati
 }
 func (f *fakeSalesInvoiceRepo) Summary(companyID string) (*domain.Summary, error) {
 	return &domain.Summary{}, nil
+}
+func (f *fakeSalesInvoiceRepo) SetTemplate(companyID, id, actorID, template string) error {
+	if f.invoice != nil {
+		f.invoice.Template = template
+	}
+	return nil
 }
 func (f *fakeSalesInvoiceRepo) Delete(companyID, id string) error { return nil }
 func (f *fakeSalesInvoiceRepo) SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error {
@@ -117,26 +124,24 @@ func TestSalesInvoiceStatusTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("update rejected once confirmed", func(t *testing.T) {
+	t.Run("update allowed once confirmed", func(t *testing.T) {
 		repo := &fakeSalesInvoiceRepo{invoice: newInvoice(model.SalesInvoiceStatusConfirmed), mitraExists: true}
 		svc := &SalesInvoiceService{repo: repo}
 		_, err := svc.Update("c1", "actor", "inv-1", &domain.UpdateDTO{
 			MitraID: "m1", Date: "2026-01-01",
 			Lines: []domain.LineDTO{siLine("A", 1, 1000)},
 		})
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 
-	t.Run("delete rejected once confirmed", func(t *testing.T) {
+	t.Run("delete allowed once confirmed", func(t *testing.T) {
 		repo := &fakeSalesInvoiceRepo{invoice: newInvoice(model.SalesInvoiceStatusConfirmed)}
 		svc := &SalesInvoiceService{repo: repo}
 		err := svc.Delete("c1", "inv-1")
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 
@@ -156,4 +161,9 @@ func TestSalesInvoiceStatusTransitions(t *testing.T) {
 
 func (f *fakeSalesInvoiceRepo) PreviewNumber(companyID, kind string) (string, error) {
 	return "INV/2026/0001", nil
+}
+
+func (f *fakeSalesInvoiceRepo) CountByKind(companyID, kind string) (int64, error) { return 0, nil }
+func (f *fakeSalesInvoiceRepo) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	return 0, nil
 }

@@ -56,8 +56,19 @@ func (r *PurchaseReceiptRepository) Create(dto *domain.CreateDTO, actorID string
 		CreatedBy:         actorID,
 		UpdatedBy:         actorID,
 	}
-	if err := r.db.Create(receipt).Error; err != nil {
-		return nil, fmt.Errorf("create purchase receipt: %w", err)
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if receipt.PurchaseInvoiceID != nil {
+			if err := applyPurchaseInvoicePayment(tx, dto.CompanyID, *receipt.PurchaseInvoiceID, dto.MitraID, dto.Amount); err != nil {
+				return mapPurchasePaymentErr(err)
+			}
+		}
+		if err := tx.Create(receipt).Error; err != nil {
+			return fmt.Errorf("create purchase receipt: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return r.FindByID(dto.CompanyID, receipt.ID)
 }
@@ -82,6 +93,9 @@ func (r *PurchaseReceiptRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 	}
 	if f.MitraID != "" {
 		q = q.Where("mitra_id = ?", f.MitraID)
+	}
+	if f.PurchaseInvoiceID != "" {
+		q = q.Where("purchase_invoice_id = ?", f.PurchaseInvoiceID)
 	}
 
 	sortCol := utils.NormalizeSort(f.Sort, purchaseReceiptListColumns, "date")
@@ -173,31 +187,71 @@ func (r *PurchaseReceiptRepository) Update(companyID, id string, dto *domain.Upd
 			return nil, &domain.ErrNumberExists{Number: number}
 		}
 	}
-	err = r.db.Model(&model.PurchaseReceipt{}).Where("id = ? AND company_id = ?", id, companyID).Updates(map[string]any{
-		"mitra_id":            dto.MitraID,
-		"purchase_invoice_id": trimPtr(dto.PurchaseInvoiceID),
-		"number":              number,
-		"date":                date,
-		"amount":              dto.Amount,
-		"payment_method":      dto.PaymentMethod,
-		"bank_account_id":     trimPtr(dto.BankAccountID),
-		"notes":               utils.SanitizeRichText(dto.Notes),
-		"updated_at":          time.Now(),
-		"updated_by":          actorID,
-	}).Error
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		// Give the old payment back to its invoice, then apply the new one (same or different
+		// invoice), so the balance always equals the sum of live payments.
+		if existing.PurchaseInvoiceID != nil {
+			if err := reversePurchaseInvoicePayment(tx, companyID, *existing.PurchaseInvoiceID, existing.Amount); err != nil {
+				return err
+			}
+		}
+		newInvoice := trimPtr(dto.PurchaseInvoiceID)
+		if newInvoice != nil {
+			if err := applyPurchaseInvoicePayment(tx, companyID, *newInvoice, dto.MitraID, dto.Amount); err != nil {
+				return mapPurchasePaymentErr(err)
+			}
+		}
+		return tx.Model(&model.PurchaseReceipt{}).Where("id = ? AND company_id = ?", id, companyID).Updates(map[string]any{
+			"mitra_id":            dto.MitraID,
+			"purchase_invoice_id": newInvoice,
+			"number":              number,
+			"date":                date,
+			"amount":              dto.Amount,
+			"payment_method":      dto.PaymentMethod,
+			"bank_account_id":     trimPtr(dto.BankAccountID),
+			"notes":               utils.SanitizeRichText(dto.Notes),
+			"updated_at":          time.Now(),
+			"updated_by":          actorID,
+		}).Error
+	})
 	if err != nil {
-		return nil, fmt.Errorf("update purchase receipt %s: %w", id, err)
+		return nil, err
 	}
 	return r.FindByID(companyID, id)
 }
 
 // Delete is a soft delete.
 func (r *PurchaseReceiptRepository) Delete(companyID, id string) error {
-	if _, err := r.FindByID(companyID, id); err != nil {
+	existing, err := r.FindByID(companyID, id)
+	if err != nil {
 		return err
 	}
-	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseReceipt{}).Error; err != nil {
-		return fmt.Errorf("delete purchase receipt %s: %w", id, err)
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if existing.PurchaseInvoiceID != nil {
+			if err := reversePurchaseInvoicePayment(tx, companyID, *existing.PurchaseInvoiceID, existing.Amount); err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseReceipt{}).Error; err != nil {
+			return fmt.Errorf("delete purchase receipt %s: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// mapPurchasePaymentErr turns balance errors into the receipt domain's own errors.
+func mapPurchasePaymentErr(err error) error {
+	var notConfirmed *ErrPurchaseInvoiceNotConfirmed
+	if errors.As(err, &notConfirmed) {
+		return &domain.ErrValidation{Message: notConfirmed.Error()}
 	}
-	return nil
+	var mismatch *ErrPurchaseInvoiceMismatch
+	if errors.As(err, &mismatch) {
+		return &domain.ErrValidation{Message: mismatch.Error()}
+	}
+	var exceeds *ErrPurchaseInvoiceExceedsBalance
+	if errors.As(err, &exceeds) {
+		return &domain.ErrExceedsBalance{Message: exceeds.Error()}
+	}
+	return err
 }

@@ -90,3 +90,7 @@ func InternalError(c *fiber.Ctx, err error) error {
 	log.Printf("[internal-error] request_id=%s path=%s err=%v", reqID, c.Path(), err)
 	return errResponse(c, fiber.StatusInternalServerError, "Terjadi kesalahan pada server", nil)
 }
+
+func ServiceUnavailable(c *fiber.Ctx, messages []string) error {
+	return errResponse(c, fiber.StatusServiceUnavailable, first(messages, "Service Unavailable"), messages)
+}

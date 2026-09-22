@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -40,6 +41,10 @@ func applySalesInvoicePayment(tx *gorm.DB, companyID, invoiceID string, amount f
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ? AND company_id = ?", invoiceID, companyID).
 		First(&invoice).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// deleted (or foreign) invoice: it can't take new payments
+			return &ErrInvoiceNotConfirmed{}
+		}
 		return fmt.Errorf("lock invoice %s: %w", invoiceID, err)
 	}
 	if invoice.Status != model.SalesInvoiceStatusConfirmed {
@@ -89,4 +94,24 @@ func reverseSalesInvoicePayment(tx *gorm.DB, companyID, invoiceID string, amount
 		"paid_amount":    paidAmount,
 		"payment_status": status,
 	}).Error
+}
+
+// refreshSalesInvoicePaymentStatus re-derives payment_status from the recorded paid_amount and the
+// CURRENT grand_total. Called after an invoice is edited (its total can change while payments stay).
+// Run inside the update transaction, after grand_total was written.
+func refreshSalesInvoicePaymentStatus(tx *gorm.DB, companyID, invoiceID string) error {
+	var invoice model.SalesInvoice
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND company_id = ?", invoiceID, companyID).
+		First(&invoice).Error; err != nil {
+		return fmt.Errorf("lock invoice %s: %w", invoiceID, err)
+	}
+	status := model.SalesInvoicePaymentUnpaid
+	switch {
+	case invoice.PaidAmount >= invoice.GrandTotal && invoice.GrandTotal > 0:
+		status = model.SalesInvoicePaymentPaid
+	case invoice.PaidAmount > 0:
+		status = model.SalesInvoicePaymentPartiallyPaid
+	}
+	return tx.Model(&model.SalesInvoice{}).Where("id = ?", invoice.ID).Update("payment_status", status).Error
 }

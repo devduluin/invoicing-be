@@ -36,6 +36,7 @@ type UserAccountSSO struct {
 	// row instead — invoice keeps it light).
 	Email       string     `gorm:"type:varchar(150);index" json:"email,omitempty"`
 	Name        string     `gorm:"type:varchar(255)"       json:"name,omitempty"`
+	Phone       string     `gorm:"type:varchar(32)"        json:"phone,omitempty"`
 	InviteToken *string    `gorm:"type:varchar(64);index"  json:"-"`
 	InvitedBy   *string    `gorm:"type:varchar(64);index"  json:"invited_by,omitempty"`
 	InvitedAt   *time.Time `                              json:"invited_at,omitempty"`

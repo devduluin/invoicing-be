@@ -6,6 +6,7 @@ package domain_salesinvoice
 
 import (
 	"fmt"
+	"time"
 
 	"duluin_invoice/app/model"
 	"duluin_invoice/utils"
@@ -37,6 +38,8 @@ type CreateDTO struct {
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
 	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
+	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
 	AdditionalDiscountType  string  `json:"additional_discount_type"  validate:"omitempty,oneof=percent amount"`
 	AdditionalDiscountValue float64 `json:"additional_discount_value" validate:"omitempty,gte=0"`
@@ -68,6 +71,8 @@ type UpdateDTO struct {
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
 	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
+	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
 	AdditionalDiscountType  string  `json:"additional_discount_type"  validate:"omitempty,oneof=percent amount"`
 	AdditionalDiscountValue float64 `json:"additional_discount_value" validate:"omitempty,gte=0"`
@@ -110,11 +115,16 @@ type IRepository interface {
 	Summary(companyID string) (*Summary, error)
 	Delete(companyID, id string) error
 	SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error
+	SetTemplate(companyID, id, actorID, template string) error
 	MitraExists(companyID, mitraID string) (bool, error)
 	TaxRates(companyID string, taxIDs []string) (map[string]utils.TaxRate, error)
 	// PreviewNumber returns what the next auto-generated number would be for
 	// this kind right now — a preview for the Add page, not a reservation.
 	PreviewNumber(companyID, kind string) (string, error)
+	// CountByKind / CountCreatedSince — the activation milestone and the Free-tier
+	// transactions/month limit.
+	CountByKind(companyID, kind string) (int64, error)
+	CountCreatedSince(companyID string, since time.Time) (int64, error)
 }
 
 type IService interface {
@@ -128,6 +138,8 @@ type IService interface {
 	BackToDraft(companyID, actorID, id string) (*model.SalesInvoice, error)
 	Cancel(companyID, actorID, id string) (*model.SalesInvoice, error)
 	PreviewNumber(companyID, kind string) (string, error)
+	// SetTemplate changes only the layout, in any status.
+	SetTemplate(companyID, actorID, id, template string) (*model.SalesInvoice, error)
 }
 
 type ErrNotFound struct{ ID string }

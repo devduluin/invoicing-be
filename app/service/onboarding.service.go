@@ -68,6 +68,7 @@ func (s *OnboardingService) Submit(actor domain.Actor, dto domain.SubmitDTO) (*d
 		CreatedBy:               actor.SSOUserID,
 		UpdatedBy:               actor.SSOUserID,
 	}
+	company.ApplyLeadSignals()
 
 	if err := s.repo.CreateCompany(company); err != nil {
 		return nil, err

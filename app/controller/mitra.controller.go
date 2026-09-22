@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	contactdomain "duluin_invoice/app/domain/contactperson"
 	domain "duluin_invoice/app/domain/mitra"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
@@ -29,6 +30,9 @@ func (ctrl *MitraController) Create(c *fiber.Ctx) error {
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
+
+	// Creating a partner WITH contact persons needs the contact permission too (not just the partner one).
+	dto.ContactPerms = contactPerms(c)
 
 	mitra, err := ctrl.svc.Create(companyID, middlewares.GetUserID(c), &dto)
 	if err != nil {
@@ -74,6 +78,8 @@ func (ctrl *MitraController) Update(c *fiber.Ctx) error {
 		return utils.ValidationFailed(c, msgs)
 	}
 
+	dto.ContactPerms = contactPerms(c)
+
 	mitra, err := ctrl.svc.Update(
 		middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto,
 	)
@@ -90,7 +96,23 @@ func (ctrl *MitraController) Delete(c *fiber.Ctx) error {
 	return utils.Deleted(c, "Partner deleted")
 }
 
+// contactPerms — what the caller may do to contact persons; a partner save that needs more is refused.
+func contactPerms(c *fiber.Ctx) contactdomain.Perms {
+	return contactdomain.Perms{
+		Create: middlewares.HasAnyPermission(c, "invoice-mitra-contact-create"),
+		Update: middlewares.HasAnyPermission(c, "invoice-mitra-contact-update"),
+		Delete: middlewares.HasAnyPermission(c, "invoice-mitra-contact-delete"),
+	}
+}
+
 func handleMitraError(c *fiber.Ctx, err error) error {
+	if handled, resp := handleActivationError(c, err); handled {
+		return resp
+	}
+	var forbidden *contactdomain.ErrForbidden
+	if errors.As(err, &forbidden) {
+		return utils.Forbidden(c, []string{err.Error()})
+	}
 	var inUse *utils.ErrInUse
 	if errors.As(err, &inUse) {
 		return utils.InUse(c, inUse.Message)

@@ -11,6 +11,7 @@ func AllModels() []interface{} {
 	return []interface{}{
 		&MigrationRecord{},
 		&Company{},
+		&AuditLog{},
 		&UserAccountSSO{},
 		&Mitra{},
 		&BankAccount{},
@@ -24,6 +25,9 @@ func AllModels() []interface{} {
 		&SalesOrderLine{},
 		&SalesOrderLineTax{},
 		&SalesInvoice{},
+		&DocumentTemplateDefault{},
+		&DocumentConfiguration{},
+		&ContactPerson{},
 		&SalesInvoiceLine{},
 		&SalesInvoiceLineTax{},
 		&SalesReceipt{},
@@ -136,6 +140,13 @@ func ensurePartialIndexes(db *gorm.DB) error {
 		 ON sales_payments (company_id, lower(number)) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sales_payments_invoice
 		 ON sales_payments (sales_invoice_id) WHERE deleted_at IS NULL`,
+		// Contact persons: no duplicate active contact under a partner. (The old "one primary"
+		// index is dropped: there is no primary contact any more.)
+		`DROP INDEX IF EXISTS uq_contact_persons_primary_active`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_persons_dup_active
+		 ON contact_persons (mitra_id, lower(name), lower(coalesce(email, '')), coalesce(phone, '')) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_contact_persons_mitra_active
+		 ON contact_persons (mitra_id) WHERE deleted_at IS NULL`,
 	}
 	for _, s := range stmts {
 		if err := db.Exec(s).Error; err != nil {

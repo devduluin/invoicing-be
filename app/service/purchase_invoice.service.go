@@ -9,14 +9,20 @@ import (
 	"duluin_invoice/utils"
 )
 
-type PurchaseInvoiceService struct{ repo domain.IRepository }
+type PurchaseInvoiceService struct {
+	repo       domain.IRepository
+	activation transactionLimiter
+}
 
-func NewPurchaseInvoiceService(repo domain.IRepository) domain.IService {
-	return &PurchaseInvoiceService{repo: repo}
+func NewPurchaseInvoiceService(repo domain.IRepository, activation transactionLimiter) domain.IService {
+	return &PurchaseInvoiceService{repo: repo, activation: activation}
 }
 
 func (s *PurchaseInvoiceService) Create(companyID, actorID string, dto *domain.CreateDTO) (*model.PurchaseInvoice, error) {
 	if err := s.checkMitra(companyID, dto.MitraID); err != nil {
+		return nil, err
+	}
+	if err := s.activation.CheckTransactionLimit(companyID); err != nil {
 		return nil, err
 	}
 	calc, err := s.calc(companyID, dto.Lines, dto.AdditionalDiscountType, dto.AdditionalDiscountValue, dto.ShippingCost)
@@ -24,16 +30,17 @@ func (s *PurchaseInvoiceService) Create(companyID, actorID string, dto *domain.C
 		return nil, err
 	}
 	dto.CompanyID = companyID
-	return s.repo.Create(dto, calc, actorID)
-}
-
-func (s *PurchaseInvoiceService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.PurchaseInvoice, error) {
-	existing, err := s.repo.FindByID(companyID, id)
+	row, err := s.repo.Create(dto, calc, actorID)
 	if err != nil {
 		return nil, err
 	}
-	if existing.Status != model.PurchaseInvoiceStatusDraft {
-		return nil, &domain.ErrNotEditable{}
+	s.activation.Recompute(companyID)
+	return row, nil
+}
+
+func (s *PurchaseInvoiceService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.PurchaseInvoice, error) {
+	if _, err := s.repo.FindByID(companyID, id); err != nil {
+		return nil, err
 	}
 	if err := s.checkMitra(companyID, dto.MitraID); err != nil {
 		return nil, err
@@ -54,12 +61,8 @@ func (s *PurchaseInvoiceService) List(f *domain.Filter) (*utils.OffsetPagination
 }
 
 func (s *PurchaseInvoiceService) Delete(companyID, id string) error {
-	existing, err := s.repo.FindByID(companyID, id)
-	if err != nil {
+	if _, err := s.repo.FindByID(companyID, id); err != nil {
 		return err
-	}
-	if existing.Status != model.PurchaseInvoiceStatusDraft {
-		return &domain.ErrNotEditable{}
 	}
 	return s.repo.Delete(companyID, id)
 }
@@ -181,4 +184,20 @@ func (s *PurchaseInvoiceService) resolveTaxRates(companyID string, lines []domai
 
 func (s *PurchaseInvoiceService) PreviewNumber(companyID string) (string, error) {
 	return s.repo.PreviewNumber(companyID)
+}
+
+// SetTemplate changes which layout the document prints with (any status; presentation only).
+func (s *PurchaseInvoiceService) SetTemplate(companyID, actorID, id, template string) (*model.PurchaseInvoice, error) {
+	if !model.IsValidSalesInvoiceTemplate(template) {
+		return nil, &domain.ErrValidation{Message: "unknown template"}
+	}
+	if err := s.repo.SetTemplate(companyID, id, actorID, template); err != nil {
+		return nil, err
+	}
+	return s.repo.FindByID(companyID, id)
+}
+
+// Summary returns the dashboard figures for the company's purchase invoices.
+func (s *PurchaseInvoiceService) Summary(companyID string) (*domain.Summary, error) {
+	return s.repo.Summary(companyID)
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	domain "duluin_invoice/app/domain/salesorder"
 	"duluin_invoice/app/model"
@@ -32,7 +33,8 @@ func (f *fakeSalesOrderRepo) FindByID(companyID, id string) (*model.SalesOrder, 
 func (f *fakeSalesOrderRepo) FindAll(fl *domain.Filter) (*utils.OffsetPaginationResult, error) {
 	return nil, nil
 }
-func (f *fakeSalesOrderRepo) Delete(companyID, id string) error { return nil }
+func (f *fakeSalesOrderRepo) Delete(companyID, id string) error                         { return nil }
+func (f *fakeSalesOrderRepo) SetTemplate(companyID, id, actorID, template string) error { return nil }
 func (f *fakeSalesOrderRepo) SetStatus(companyID, id, actorID string, status model.SalesOrderStatus) error {
 	if f.order != nil {
 		f.order.Status = status
@@ -120,30 +122,32 @@ func TestSalesOrderStatusTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("update rejected once confirmed", func(t *testing.T) {
+	t.Run("update allowed once confirmed", func(t *testing.T) {
 		repo := &fakeSalesOrderRepo{order: newOrder(model.SalesOrderStatusConfirmed), mitraExists: true}
 		svc := &SalesOrderService{repo: repo}
 		_, err := svc.Update("c1", "actor", "so-1", &domain.UpdateDTO{
 			MitraID: "m1", Date: "2026-01-01",
 			Lines: []domain.LineDTO{soLine("A", 1, 1000, 0)},
 		})
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 
-	t.Run("delete rejected once confirmed", func(t *testing.T) {
+	t.Run("delete allowed once confirmed", func(t *testing.T) {
 		repo := &fakeSalesOrderRepo{order: newOrder(model.SalesOrderStatusConfirmed)}
 		svc := &SalesOrderService{repo: repo}
 		err := svc.Delete("c1", "so-1")
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 }
 
 func (f *fakeSalesOrderRepo) PreviewNumber(companyID string) (string, error) {
 	return "SO/2026/0001", nil
+}
+
+func (f *fakeSalesOrderRepo) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	return 0, nil
 }

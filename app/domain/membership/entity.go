@@ -80,6 +80,13 @@ type MemberView struct {
 	IsBanned    bool    `json:"is_banned"`
 	Pending     bool    `json:"pending"`
 	InvitedAt   *string `json:"invited_at,omitempty"`
+	Status      string  `json:"status,omitempty"`
+	Phone       string  `json:"phone,omitempty"`
+	CreatedAt   string  `json:"created_at,omitempty"`
+	// InviteURL is the link SSO put in the invitation email. Only filled outside production.
+	InviteURL string `json:"invite_url,omitempty"`
+	// Companies the caller can see this person in (each with its own role).
+	Companies []MemberCompany `json:"companies,omitempty"`
 }
 
 // MemberFilter drives the paginated team list.
@@ -95,5 +102,65 @@ type MemberFilter struct {
 
 // MemberListColumns — fields the team MasterTable may show / sort by.
 var MemberListColumns = []string{
-	"name", "email", "role", "is_activated", "is_banned", "pending", "invited_at",
+	"name", "email", "phone", "role", "status", "companies", "created_at",
+}
+
+// Member statuses shown in User Management.
+const (
+	StatusActive   = "active"
+	StatusPending  = "pending"
+	StatusInactive = "inactive"
+)
+
+// MemberCompany is one company a person has (or may be given) access to.
+type MemberCompany struct {
+	MemberID    string `json:"member_id,omitempty"`
+	CompanyID   string `json:"company_id"`
+	CompanyName string `json:"company_name"`
+	CompanyCode string `json:"company_code,omitempty"`
+	RoleID      string `json:"role_id,omitempty"`
+	RoleName    string `json:"role,omitempty"`
+	Status      string `json:"status"`
+}
+
+// MemberDetail is the full picture of one person across the companies the
+// caller may see.
+type MemberDetail struct {
+	MemberView
+	AcceptedAt *string         `json:"accepted_at,omitempty"`
+	Companies  []MemberCompany `json:"companies"`
+}
+
+// CompanyAssignment is one (company, role) grant.
+type CompanyAssignment struct {
+	CompanyID string `json:"company_id"`
+	RoleID    string `json:"role_id"`
+}
+
+// InviteMultiInput invites one person to several companies at once.
+type InviteMultiInput struct {
+	Email     string
+	Name      string
+	Phone     string
+	Active    bool
+	SendEmail bool
+	Grants    []CompanyAssignment
+}
+
+// ValidateResult tells the invite form what is already known about an email.
+type ValidateResult struct {
+	Status           string   `json:"status"` // new_user | existing_user | already_member
+	ExistsInSSO      bool     `json:"exists_in_sso"`
+	HasPendingInvite bool     `json:"has_pending_invite"`
+	CanInvite        bool     `json:"can_invite"`
+	UserName         string   `json:"user_name,omitempty"`
+	UserPhone        string   `json:"user_phone,omitempty"`
+	MemberCompanyIDs []string `json:"member_company_ids"`
+}
+
+// ManageableCompany is a company the caller may grant access to.
+type ManageableCompany struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Code string `json:"code,omitempty"`
 }

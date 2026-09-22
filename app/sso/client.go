@@ -98,22 +98,27 @@ func (c *Client) Invite(ctx context.Context, req InviteRequest) (*InviteResult, 
 	if req.From != "" {
 		payload["from"] = req.From
 	}
-	raw, err := c.do(ctx, http.MethodPost, "/invite", "", payload)
+	raw, err := c.do(ctx, http.MethodPost, "/users/invite", "", payload)
 	if err != nil {
 		return nil, err
 	}
+	// SSO answers this endpoint with `result` (other endpoints use `data`).
 	var env struct {
-		Data InviteResult `json:"data"`
+		Data   InviteResult `json:"data"`
+		Result InviteResult `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("sso invite: decode response: %w", err)
+	}
+	if env.Result.URL != "" || env.Result.Email != "" {
+		return &env.Result, nil
 	}
 	return &env.Data, nil
 }
 
 // InviteSimple adapts Invite to notification.SSOInviter's plain-args shape.
-func (c *Client) InviteSimple(ctx context.Context, email, name, redirectURL, inviterName, companyName, from string) error {
-	_, err := c.Invite(ctx, InviteRequest{
+func (c *Client) InviteSimple(ctx context.Context, email, name, redirectURL, inviterName, companyName, from string) (string, error) {
+	res, err := c.Invite(ctx, InviteRequest{
 		Email:       email,
 		Name:        name,
 		RedirectURL: redirectURL,
@@ -121,22 +126,56 @@ func (c *Client) InviteSimple(ctx context.Context, email, name, redirectURL, inv
 		CompanyName: companyName,
 		From:        from,
 	})
-	return err
+	if err != nil {
+		return "", err
+	}
+	return res.URL, nil
 }
 
-// UserExists calls SSO's POST /auth/user-validation to check whether an
-// email already has an account for this product. A 404 means "not
-// registered" — a normal outcome, not a failure.
+// UserInfo is what SSO's POST /users/auth/user-validation says about an email.
+type UserInfo struct {
+	Exists     bool
+	HasAccount bool // already has an account for this product (X-Account-Type)
+	Name       string
+	Phone      string
+}
+
+// ValidateUser calls SSO's POST /users/auth/user-validation (the same endpoint acc-master uses). A 404
+// means "not registered" and is a normal outcome; any other failure is returned as an error so
+// the caller never mistakes an SSO outage for "new user".
+func (c *Client) ValidateUser(ctx context.Context, email string) (UserInfo, error) {
+	raw, err := c.do(ctx, http.MethodPost, "/users/auth/user-validation", "", map[string]any{"email": email})
+	if err != nil {
+		var ssoErr *Error
+		if as(err, &ssoErr) && ssoErr.Status == http.StatusNotFound {
+			// SSO answers an unknown email with a JSON body (data.has_account=false). A 404 without it
+			// is a wrong URL, which must never be read as "not registered".
+			var nf struct {
+				Data map[string]any `json:"data"`
+			}
+			if json.Unmarshal(raw, &nf) == nil {
+				if _, ok := nf.Data["has_account"]; ok {
+					return UserInfo{}, nil
+				}
+			}
+		}
+		return UserInfo{}, err
+	}
+	var env struct {
+		Data struct {
+			Name       string `json:"name"`
+			Phone      string `json:"phone"`
+			HasAccount bool   `json:"has_account"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(raw, &env)
+	return UserInfo{Exists: true, HasAccount: env.Data.HasAccount, Name: env.Data.Name, Phone: env.Data.Phone}, nil
+}
+
+// UserExists reports whether an email is registered in SSO.
 func (c *Client) UserExists(ctx context.Context, email string) (bool, error) {
-	_, err := c.do(ctx, http.MethodPost, "/auth/user-validation", "", map[string]any{"email": email})
-	if err == nil {
-		return true, nil
-	}
-	var ssoErr *Error
-	if as(err, &ssoErr) && ssoErr.Status == http.StatusNotFound {
-		return false, nil
-	}
-	return false, err
+	info, err := c.ValidateUser(ctx, email)
+	return info.Exists, err
 }
 
 func (c *Client) postForm(ctx context.Context, path string, payload map[string]any) error {

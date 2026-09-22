@@ -71,9 +71,18 @@ func (r *SalesOrderRepository) Create(dto *domain.CreateDTO, calc *domain.OrderC
 			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
 			SignatureData:            dto.SignatureData,
 			StampDuty:                dto.StampDuty,
+			Template:                 templateForDoc(tx, dto.CompanyID, "sales_order", dto.Template),
 			CreatedBy:                actorID,
 			UpdatedBy:                actorID,
 		}
+		snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
+		if err != nil {
+			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		order.ContactPersonID, order.ContactName, order.ContactPosition, order.ContactPhone, order.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
 		if err := tx.Create(order).Error; err != nil {
 			return fmt.Errorf("create sales order: %w", err)
 		}
@@ -142,6 +151,24 @@ func (r *SalesOrderRepository) Update(companyID, id string, dto *domain.UpdateDT
 			"updated_at":                 time.Now(),
 			"updated_by":                 actorID,
 		}
+		if t := strings.TrimSpace(dto.Template); t != "" {
+			updates["template"] = t
+		}
+		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
+		if err != nil {
+			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		if !snap.Keep {
+			updates["contact_person_id"] = snap.ID
+			updates["contact_name"] = snap.Name
+			updates["contact_position"] = snap.Position
+			updates["contact_phone"] = snap.Phone
+			updates["contact_email"] = snap.Email
+		}
+
 		if err := tx.Model(&model.SalesOrder{}).
 			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update sales order %s: %w", id, err)
@@ -405,4 +432,29 @@ func parseSalesOrderDate(s string) (time.Time, error) {
 // now — a preview for the Add page, not a reservation.
 func (r *SalesOrderRepository) PreviewNumber(companyID string) (string, error) {
 	return generateSalesOrderNumber(r.db, companyID, time.Now())
+}
+
+// SetTemplate changes ONLY the layout of an existing document. Allowed in any status: it is
+// presentation, so it never touches lines, totals or the document lifecycle.
+func (r *SalesOrderRepository) SetTemplate(companyID, id, actorID, template string) error {
+	res := r.db.Model(&model.SalesOrder{}).Where("id = ? AND company_id = ?", id, companyID).
+		Updates(map[string]any{"template": template, "updated_at": time.Now(), "updated_by": actorID})
+	if res.Error != nil {
+		return fmt.Errorf("set sales order template %s: %w", id, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return &domain.ErrNotFound{ID: id}
+	}
+	return nil
+}
+
+// CountCreatedSince — every sales order created on or after `since`. Used for the Free-tier
+// transactions/month limit.
+func (r *SalesOrderRepository) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.SalesOrder{}).Where("company_id = ? AND created_at >= ?", companyID, since).Count(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("count sales orders since: %w", err)
+	}
+	return n, nil
 }

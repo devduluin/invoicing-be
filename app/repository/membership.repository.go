@@ -17,7 +17,7 @@ import (
 var membershipColumns = []string{
 	"id", "user_id", "company_id", "secondary_id", "role_id",
 	"is_activated", "is_banned", "banned_reason", "activated_at",
-	"email", "name", "invite_token", "invited_by", "invited_at",
+	"email", "name", "phone", "invite_token", "invited_by", "invited_at",
 	"created_at", "updated_at",
 }
 
@@ -243,6 +243,9 @@ func upsertPatch(m *model.UserAccountSSO) map[string]any {
 	if strings.TrimSpace(m.Name) != "" {
 		patch["name"] = m.Name
 	}
+	if strings.TrimSpace(m.Phone) != "" {
+		patch["phone"] = strings.TrimSpace(m.Phone)
+	}
 	if m.BannedReason != "" {
 		patch["banned_reason"] = m.BannedReason
 	}
@@ -308,4 +311,40 @@ func (r *MembershipRepository) CountConsumedInviteSlots(companyID, ownerRoleID s
 		return 0, fmt.Errorf("count consumed invite slots: %w", err)
 	}
 	return n, nil
+}
+
+// ListByEmailInCompanies returns the live memberships (any state) of the given
+// people in the given companies, Company preloaded. One query, no N+1.
+func (r *MembershipRepository) ListByEmailInCompanies(emails, companyIDs []string) ([]model.UserAccountSSO, error) {
+	if len(emails) == 0 || len(companyIDs) == 0 {
+		return nil, nil
+	}
+	lowered := make([]string, 0, len(emails))
+	for _, e := range emails {
+		lowered = append(lowered, strings.ToLower(strings.TrimSpace(e)))
+	}
+	var rows []model.UserAccountSSO
+	err := r.db.Select(membershipColumns).Preload("Company").
+		Where("company_id IN ? AND lower(email) IN ?", companyIDs, lowered).
+		Order("created_at ASC").Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memberships by email: %w", err)
+	}
+	return rows, nil
+}
+
+// FindAnyByEmail returns the newest membership row carrying this email in any
+// company — used only to pre-fill a known person's name/phone.
+func (r *MembershipRepository) FindAnyByEmail(email string) (*model.UserAccountSSO, error) {
+	var m model.UserAccountSSO
+	err := r.db.Select(membershipColumns).
+		Where("lower(email) = lower(?)", strings.TrimSpace(email)).
+		Order("created_at DESC").First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find membership by email: %w", err)
+	}
+	return &m, nil
 }

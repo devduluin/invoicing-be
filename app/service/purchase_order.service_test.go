@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	domain "duluin_invoice/app/domain/purchaseorder"
 	"duluin_invoice/app/model"
@@ -33,6 +34,9 @@ func (f *fakePurchaseOrderRepo) FindAll(fl *domain.Filter) (*utils.OffsetPaginat
 	return nil, nil
 }
 func (f *fakePurchaseOrderRepo) Delete(companyID, id string) error { return nil }
+func (f *fakePurchaseOrderRepo) SetTemplate(companyID, id, actorID, template string) error {
+	return nil
+}
 func (f *fakePurchaseOrderRepo) SetStatus(companyID, id, actorID string, status model.PurchaseOrderStatus) error {
 	if f.order != nil {
 		f.order.Status = status
@@ -120,30 +124,32 @@ func TestPurchaseOrderStatusTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("update rejected once confirmed", func(t *testing.T) {
+	t.Run("update allowed once confirmed", func(t *testing.T) {
 		repo := &fakePurchaseOrderRepo{order: newOrder(model.PurchaseOrderStatusConfirmed), mitraExists: true}
 		svc := &PurchaseOrderService{repo: repo}
 		_, err := svc.Update("c1", "actor", "po-1", &domain.UpdateDTO{
 			MitraID: "m1", Date: "2026-01-01",
 			Lines: []domain.LineDTO{poLine("A", 1, 1000, 0)},
 		})
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 
-	t.Run("delete rejected once confirmed", func(t *testing.T) {
+	t.Run("delete allowed once confirmed", func(t *testing.T) {
 		repo := &fakePurchaseOrderRepo{order: newOrder(model.PurchaseOrderStatusConfirmed)}
 		svc := &PurchaseOrderService{repo: repo}
 		err := svc.Delete("c1", "po-1")
-		var ne *domain.ErrNotEditable
-		if !errors.As(err, &ne) {
-			t.Fatalf("expected ErrNotEditable, got %v", err)
+		if err != nil {
+			t.Fatalf("status must not make a document immutable, got %v", err)
 		}
 	})
 }
 
 func (f *fakePurchaseOrderRepo) PreviewNumber(companyID string) (string, error) {
 	return "PO/2026/0001", nil
+}
+
+func (f *fakePurchaseOrderRepo) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	return 0, nil
 }

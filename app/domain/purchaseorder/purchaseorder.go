@@ -6,6 +6,7 @@ package domain_purchaseorder
 
 import (
 	"fmt"
+	"time"
 
 	"duluin_invoice/app/model"
 	"duluin_invoice/utils"
@@ -41,6 +42,9 @@ type CreateDTO struct {
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
 	SignatureData  string `json:"signature_data"  validate:"omitempty"`
 	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
+	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
+	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
@@ -62,6 +66,9 @@ type UpdateDTO struct {
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
 	SignatureData  string `json:"signature_data"  validate:"omitempty"`
 	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
+	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
+	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
@@ -120,13 +127,18 @@ type IRepository interface {
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
 	Delete(companyID, id string) error
 	SetStatus(companyID, id, actorID string, status model.PurchaseOrderStatus) error
+	SetTemplate(companyID, id, actorID, template string) error
 	MitraExists(companyID, mitraID string) (bool, error)
 	// TaxRates resolves each given tax id to its rate/calc_method in one query.
 	TaxRates(companyID string, taxIDs []string) (map[string]TaxInfo, error)
 	PreviewNumber(companyID string) (string, error)
+	// CountCreatedSince — the Free-tier transactions/month limit.
+	CountCreatedSince(companyID string, since time.Time) (int64, error)
 }
 
 type IService interface {
+	// SetTemplate changes only the layout, in any status.
+	SetTemplate(companyID, actorID, id, template string) (*model.PurchaseOrder, error)
 	Create(companyID, actorID string, dto *CreateDTO) (*model.PurchaseOrder, error)
 	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.PurchaseOrder, error)
 	Get(companyID, id string) (*model.PurchaseOrder, error)

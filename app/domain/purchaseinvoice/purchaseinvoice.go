@@ -6,6 +6,7 @@ package domain_purchaseinvoice
 
 import (
 	"fmt"
+	"time"
 
 	"duluin_invoice/app/model"
 	"duluin_invoice/utils"
@@ -45,6 +46,9 @@ type CreateDTO struct {
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
 	SignatureData  string `json:"signature_data"  validate:"omitempty"`
 	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
+	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
+	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
@@ -69,6 +73,9 @@ type UpdateDTO struct {
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
 	SignatureData  string `json:"signature_data"  validate:"omitempty"`
 	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
+	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
+	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
@@ -79,11 +86,15 @@ type Filter struct {
 	Search    string
 	MitraID   string
 	Status    string
-	Page      int
-	PageSize  int
-	Sort      string
-	Order     string
-	Fields    []string
+	// PaymentStatus may list several values ("unpaid,partially_paid"); Overdue = confirmed, not fully
+	// paid, due date before today.
+	PaymentStatus string
+	Overdue       bool
+	Page          int
+	PageSize      int
+	Sort          string
+	Order         string
+	Fields        []string
 }
 
 type IRepository interface {
@@ -93,12 +104,22 @@ type IRepository interface {
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
 	Delete(companyID, id string) error
 	SetStatus(companyID, id, actorID string, status model.PurchaseInvoiceStatus) error
+	SetTemplate(companyID, id, actorID, template string) error
+	Summary(companyID string) (*Summary, error)
 	MitraExists(companyID, mitraID string) (bool, error)
 	TaxRates(companyID string, taxIDs []string) (map[string]utils.TaxRate, error)
 	PreviewNumber(companyID string) (string, error)
+	// CountAll / CountCreatedSince — the activation milestone and the Free-tier
+	// transactions/month limit.
+	CountAll(companyID string) (int64, error)
+	CountCreatedSince(companyID string, since time.Time) (int64, error)
 }
 
 type IService interface {
+	// Summary — the dashboard numbers (same rules as the list's payment / overdue filters).
+	Summary(companyID string) (*Summary, error)
+	// SetTemplate changes only the layout, in any status.
+	SetTemplate(companyID, actorID, id, template string) (*model.PurchaseInvoice, error)
 	Create(companyID, actorID string, dto *CreateDTO) (*model.PurchaseInvoice, error)
 	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.PurchaseInvoice, error)
 	Get(companyID, id string) (*model.PurchaseInvoice, error)
@@ -135,3 +156,23 @@ func (e *ErrNotEditable) Error() string {
 type ErrInvalidTransition struct{ Message string }
 
 func (e *ErrInvalidTransition) Error() string { return e.Message }
+
+// SummaryFigure — a total and how many purchase invoices make it up.
+type SummaryFigure struct {
+	Amount float64 `json:"amount"`
+	Count  int64   `json:"count"`
+}
+
+// Summary — the dashboard numbers for purchase invoices, the payables mirror of the sales summary:
+//   - Outstanding: issued and not fully paid; amount = total - paid
+//   - Overdue: outstanding AND past its due date (the same rule as the list's "overdue" filter)
+//   - ThisMonth: issued this month, by invoice total
+//   - Drafts: how many are still drafts
+//
+// Cancelled and deleted purchase invoices are never counted.
+type Summary struct {
+	Outstanding SummaryFigure `json:"outstanding"`
+	Overdue     SummaryFigure `json:"overdue"`
+	ThisMonth   SummaryFigure `json:"this_month"`
+	Drafts      int64         `json:"drafts"`
+}

@@ -79,3 +79,10 @@ type ErrRoleInUse struct{ Count int }
 func (e *ErrRoleInUse) Error() string {
 	return fmt.Sprintf("role is still used by %d member(s)", e.Count)
 }
+
+// ErrSSOUnavailable — SSO could not answer the user lookup (HTTP 503); never treated as "new user".
+type ErrSSOUnavailable struct{}
+
+func (e *ErrSSOUnavailable) Error() string {
+	return "could not verify the user with SSO, please try again"
+}

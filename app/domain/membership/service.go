@@ -26,6 +26,16 @@ type IMembershipService interface {
 	UpdateMemberRole(a Actor, companyID, targetMemberID, roleID string) (*MemberView, error)
 	RemoveMember(a Actor, companyID, targetMemberID string) error
 
+	// User Management (acc-master parity): verify → multi-company invite → access.
+	ValidateUser(a Actor, email string) (*ValidateResult, error)
+	ManageableCompanies(a Actor, perm string) ([]ManageableCompany, error)
+	InviteMulti(a Actor, in InviteMultiInput) ([]MemberView, error)
+	GetMember(a Actor, companyID, id string) (*MemberDetail, error)
+	SyncAssignments(a Actor, companyID, id string, grants []CompanyAssignment) (*MemberDetail, error)
+	SetMemberActive(a Actor, companyID, id string, active bool) (*MemberView, error)
+	ResendInvite(a Actor, companyID, id string) (inviteURL string, err error)
+	UpdateMemberProfile(a Actor, companyID, id, name, phone string) (*MemberView, error)
+
 	ListMyCompanies(a Actor) ([]CompanyMembership, error)
 }
 

@@ -20,6 +20,10 @@ type IMembershipRepository interface {
 	// ListByCompany is the paginated team list (1 COUNT + 1 SELECT).
 	ListByCompany(f MemberFilter) ([]model.UserAccountSSO, int64, error)
 
+	// ListByEmailInCompanies — every live membership of these emails in these companies.
+	ListByEmailInCompanies(emails, companyIDs []string) ([]model.UserAccountSSO, error)
+	// FindAnyByEmail — newest row for the email in any company (name/phone prefill).
+	FindAnyByEmail(email string) (*model.UserAccountSSO, error)
 	FindByIDInCompany(companyID, id string) (*model.UserAccountSSO, error)
 	FindActiveMemberByEmail(companyID, email string) (*model.UserAccountSSO, error)
 	FindPendingInviteByEmail(companyID, email string) (*model.UserAccountSSO, error)

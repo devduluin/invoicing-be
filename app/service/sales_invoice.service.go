@@ -9,10 +9,21 @@ import (
 	"duluin_invoice/utils"
 )
 
-type SalesInvoiceService struct{ repo domain.IRepository }
+// transactionLimiter is the slice of ActivationService this service needs: refuse a new invoice
+// past the Free-tier transactions/month cap, and let a qualifying invoice trip the one-way
+// activation flip right away.
+type transactionLimiter interface {
+	CheckTransactionLimit(companyID string) error
+	Recompute(companyID string)
+}
 
-func NewSalesInvoiceService(repo domain.IRepository) domain.IService {
-	return &SalesInvoiceService{repo: repo}
+type SalesInvoiceService struct {
+	repo       domain.IRepository
+	activation transactionLimiter
+}
+
+func NewSalesInvoiceService(repo domain.IRepository, activation transactionLimiter) domain.IService {
+	return &SalesInvoiceService{repo: repo, activation: activation}
 }
 
 func (s *SalesInvoiceService) Create(companyID, actorID string, dto *domain.CreateDTO) (*model.SalesInvoice, error) {
@@ -22,21 +33,25 @@ func (s *SalesInvoiceService) Create(companyID, actorID string, dto *domain.Crea
 	if err := s.checkMitra(companyID, dto.MitraID); err != nil {
 		return nil, err
 	}
+	if err := s.activation.CheckTransactionLimit(companyID); err != nil {
+		return nil, err
+	}
 	calc, err := s.calc(companyID, dto.Lines, dto.AdditionalDiscountType, dto.AdditionalDiscountValue, dto.ShippingCost)
 	if err != nil {
 		return nil, err
 	}
 	dto.CompanyID = companyID
-	return s.repo.Create(dto, calc, actorID)
-}
-
-func (s *SalesInvoiceService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.SalesInvoice, error) {
-	existing, err := s.repo.FindByID(companyID, id)
+	row, err := s.repo.Create(dto, calc, actorID)
 	if err != nil {
 		return nil, err
 	}
-	if existing.Status != model.SalesInvoiceStatusDraft {
-		return nil, &domain.ErrNotEditable{}
+	s.activation.Recompute(companyID)
+	return row, nil
+}
+
+func (s *SalesInvoiceService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.SalesInvoice, error) {
+	if _, err := s.repo.FindByID(companyID, id); err != nil {
+		return nil, err
 	}
 	if err := s.checkMitra(companyID, dto.MitraID); err != nil {
 		return nil, err
@@ -61,12 +76,8 @@ func (s *SalesInvoiceService) List(f *domain.Filter) (*utils.OffsetPaginationRes
 }
 
 func (s *SalesInvoiceService) Delete(companyID, id string) error {
-	existing, err := s.repo.FindByID(companyID, id)
-	if err != nil {
+	if _, err := s.repo.FindByID(companyID, id); err != nil {
 		return err
-	}
-	if existing.Status != model.SalesInvoiceStatusDraft {
-		return &domain.ErrNotEditable{}
 	}
 	return s.repo.Delete(companyID, id)
 }
@@ -191,4 +202,16 @@ func (s *SalesInvoiceService) PreviewNumber(companyID, kind string) (string, err
 		return "", &domain.ErrValidation{Message: "invalid kind"}
 	}
 	return s.repo.PreviewNumber(companyID, kind)
+}
+
+// SetTemplate changes which layout the invoice prints with. Presentation only, so it is allowed in
+// every status (a confirmed invoice keeps its lines and totals untouched).
+func (s *SalesInvoiceService) SetTemplate(companyID, actorID, id, template string) (*model.SalesInvoice, error) {
+	if !model.IsValidSalesInvoiceTemplate(template) {
+		return nil, &domain.ErrValidation{Message: "unknown template"}
+	}
+	if err := s.repo.SetTemplate(companyID, id, actorID, template); err != nil {
+		return nil, err
+	}
+	return s.repo.FindByID(companyID, id)
 }

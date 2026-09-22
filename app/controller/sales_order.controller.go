@@ -113,6 +113,9 @@ func (ctrl *SalesOrderController) Cancel(c *fiber.Ctx) error {
 }
 
 func salesOrderErr(c *fiber.Ctx, err error) error {
+	if handled, resp := handleActivationError(c, err); handled {
+		return resp
+	}
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {
 		return utils.NotFound(c, []string{err.Error()})
@@ -134,4 +137,23 @@ func salesOrderErr(c *fiber.Ctx, err error) error {
 		return utils.ValidationFailed(c, []string{err.Error()})
 	}
 	return utils.InternalError(c, err)
+}
+
+type setSalesOrderTemplateDTO struct {
+	Template string `json:"template" validate:"required,oneof=template_1 template_2 template_3 template_4"`
+}
+
+func (ctrl *SalesOrderController) SetTemplate(c *fiber.Ctx) error {
+	var dto setSalesOrderTemplateDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return utils.BadRequest(c, []string{"Invalid request body"})
+	}
+	if msgs := validation.Struct(&dto); msgs != nil {
+		return utils.ValidationFailed(c, msgs)
+	}
+	row, err := ctrl.svc.SetTemplate(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), dto.Template)
+	if err != nil {
+		return salesOrderErr(c, err)
+	}
+	return utils.Ok(c, row, "Template updated")
 }

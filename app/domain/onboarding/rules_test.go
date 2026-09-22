@@ -10,8 +10,9 @@ func validSubmit() SubmitDTO {
 		NamaPerusahaan: "Toko Maju",
 		TipeAkun:       "perseorangan",
 		JenisUsaha:     "Retail",
-		JumlahKaryawan: "6-10",
+		JumlahKaryawan: "11-50",
 		Telepon:        "0811",
+		Email:          "owner@toko.co.id",
 		KebutuhanUser:  []string{"invoicing"},
 	}
 }

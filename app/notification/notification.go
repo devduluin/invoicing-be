@@ -22,7 +22,7 @@ type UserInvite struct {
 // Service is the transactional-notification port. Implementations: LogService
 // (dev stub), and later a real SendGrid/SES sender.
 type Service interface {
-	SendUserInvite(ctx context.Context, msg UserInvite) error
+	SendUserInvite(ctx context.Context, msg UserInvite) (string, error)
 }
 
 // LogService is a no-op implementation that logs instead of sending. Used until
@@ -32,17 +32,17 @@ type LogService struct{}
 
 func NewLogService() *LogService { return &LogService{} }
 
-func (s *LogService) SendUserInvite(_ context.Context, msg UserInvite) error {
+func (s *LogService) SendUserInvite(_ context.Context, msg UserInvite) (string, error) {
 	log.Printf("[notification] (stub) invite email → %s <%s> | tenant=%q role=%s accept=%s",
 		msg.ToName, msg.ToEmail, msg.TenantName, msg.Role, msg.AcceptURL)
-	return nil
+	return msg.AcceptURL, nil
 }
 
 // SSOInviter is the subset of *sso.Client this package depends on — kept as
 // a plain-args interface (not sso.InviteRequest) so notification never
 // imports app/sso's full surface.
 type SSOInviter interface {
-	InviteSimple(ctx context.Context, email, name, redirectURL, inviterName, companyName, from string) error
+	InviteSimple(ctx context.Context, email, name, redirectURL, inviterName, companyName, from string) (string, error)
 }
 
 // SSOInviteService sends the invite email through SSO's own POST /invite,
@@ -59,9 +59,10 @@ func NewSSOInviteService(sso SSOInviter, from string) *SSOInviteService {
 	return &SSOInviteService{sso: sso, from: from}
 }
 
-func (s *SSOInviteService) SendUserInvite(ctx context.Context, msg UserInvite) error {
-	if err := s.sso.InviteSimple(ctx, msg.ToEmail, msg.ToName, msg.AcceptURL, msg.InviterName, msg.TenantName, s.from); err != nil {
-		return fmt.Errorf("send invite via sso: %w", err)
+func (s *SSOInviteService) SendUserInvite(ctx context.Context, msg UserInvite) (string, error) {
+	url, err := s.sso.InviteSimple(ctx, msg.ToEmail, msg.ToName, msg.AcceptURL, msg.InviterName, msg.TenantName, s.from)
+	if err != nil {
+		return "", fmt.Errorf("send invite via sso: %w", err)
 	}
-	return nil
+	return url, nil
 }

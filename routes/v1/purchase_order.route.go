@@ -18,6 +18,7 @@ func PurchaseOrderRoutes(router fiber.Router, ctrl *controller.PurchaseOrderCont
 	g.Delete("/:id", middlewares.RequirePermission("invoice-purchase-order-delete"), ctrl.Delete)
 	// Confirm/cancel/draft are lifecycle updates, not a new permission tier —
 	// gated the same as Update, matching Sales Order's convention.
+	g.Put("/:id/template", middlewares.RequirePermission("invoice-purchase-order-update"), ctrl.SetTemplate)
 	g.Post("/:id/confirm", middlewares.RequirePermission("invoice-purchase-order-update"), ctrl.Confirm)
 	g.Post("/:id/cancel", middlewares.RequirePermission("invoice-purchase-order-update"), ctrl.Cancel)
 	g.Post("/:id/draft", middlewares.RequirePermission("invoice-purchase-order-update"), ctrl.BackToDraft)

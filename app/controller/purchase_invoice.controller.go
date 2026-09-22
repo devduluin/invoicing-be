@@ -19,15 +19,17 @@ func NewPurchaseInvoiceController(svc domain.IService) *PurchaseInvoiceControlle
 
 func (ctrl *PurchaseInvoiceController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
-		CompanyID: middlewares.GetCompanyID(c),
-		Search:    c.Query("search"),
-		MitraID:   c.Query("mitra_id"),
-		Status:    c.Query("status"),
-		Page:      c.QueryInt("page", 1),
-		PageSize:  c.QueryInt("limit", 20),
-		Sort:      c.Query("sort"),
-		Order:     c.Query("order"),
-		Fields:    utils.ParseCSVParam(c.Query("fields")),
+		CompanyID:     middlewares.GetCompanyID(c),
+		Search:        c.Query("search"),
+		MitraID:       c.Query("mitra_id"),
+		Status:        c.Query("status"),
+		PaymentStatus: c.Query("payment_status"),
+		Overdue:       c.Query("overdue") == "true",
+		Page:          c.QueryInt("page", 1),
+		PageSize:      c.QueryInt("limit", 20),
+		Sort:          c.Query("sort"),
+		Order:         c.Query("order"),
+		Fields:        utils.ParseCSVParam(c.Query("fields")),
 	})
 	if err != nil {
 		return utils.InternalError(c, err)
@@ -113,6 +115,9 @@ func (ctrl *PurchaseInvoiceController) Cancel(c *fiber.Ctx) error {
 }
 
 func purchaseInvoiceErr(c *fiber.Ctx, err error) error {
+	if handled, resp := handleActivationError(c, err); handled {
+		return resp
+	}
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {
 		return utils.NotFound(c, []string{err.Error()})
@@ -129,9 +134,40 @@ func purchaseInvoiceErr(c *fiber.Ctx, err error) error {
 	if errors.As(err, &invalidTransition) {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"success": false, "message": err.Error(), "error_code": "invalid_transition"})
 	}
+	var inUse *utils.ErrInUse
+	if errors.As(err, &inUse) {
+		return utils.InUse(c, inUse.Message)
+	}
 	var v *domain.ErrValidation
 	if errors.As(err, &v) {
 		return utils.ValidationFailed(c, []string{err.Error()})
 	}
 	return utils.InternalError(c, err)
+}
+
+type setPurchaseInvoiceTemplateDTO struct {
+	Template string `json:"template" validate:"required,oneof=template_1 template_2 template_3 template_4"`
+}
+
+func (ctrl *PurchaseInvoiceController) SetTemplate(c *fiber.Ctx) error {
+	var dto setPurchaseInvoiceTemplateDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return utils.BadRequest(c, []string{"Invalid request body"})
+	}
+	if msgs := validation.Struct(&dto); msgs != nil {
+		return utils.ValidationFailed(c, msgs)
+	}
+	row, err := ctrl.svc.SetTemplate(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), dto.Template)
+	if err != nil {
+		return purchaseInvoiceErr(c, err)
+	}
+	return utils.Ok(c, row, "Template updated")
+}
+
+func (ctrl *PurchaseInvoiceController) Summary(c *fiber.Ctx) error {
+	res, err := ctrl.svc.Summary(middlewares.GetCompanyID(c))
+	if err != nil {
+		return utils.InternalError(c, err)
+	}
+	return utils.Ok(c, res, "OK")
 }

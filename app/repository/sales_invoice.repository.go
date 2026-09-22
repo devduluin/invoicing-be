@@ -86,10 +86,18 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
 			SignatureData:            dto.SignatureData,
 			StampDuty:                dto.StampDuty,
-			Template:                 templateOrDefault(dto.Template),
+			Template:                 templateFor(tx, dto),
 			CreatedBy:                actorID,
 			UpdatedBy:                actorID,
 		}
+		snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
+		if err != nil {
+			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
 		if err := tx.Create(invoice).Error; err != nil {
 			return fmt.Errorf("create sales invoice: %w", err)
 		}
@@ -174,9 +182,28 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 		if strings.TrimSpace(dto.Template) != "" {
 			updates["template"] = strings.TrimSpace(dto.Template)
 		}
+		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
+		if err != nil {
+			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		if !snap.Keep {
+			updates["contact_person_id"] = snap.ID
+			updates["contact_name"] = snap.Name
+			updates["contact_position"] = snap.Position
+			updates["contact_phone"] = snap.Phone
+			updates["contact_email"] = snap.Email
+		}
 		if err := tx.Model(&model.SalesInvoice{}).
 			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update sales invoice %s: %w", id, err)
+		}
+		// The total may have changed: paid stays as recorded, so re-derive the payment status
+		// (outstanding = max(total - paid, 0) is derived on read).
+		if err := refreshSalesInvoicePaymentStatus(tx, companyID, id); err != nil {
+			return err
 		}
 		if err := deleteSalesInvoiceLineTaxes(tx, id); err != nil {
 			return err
@@ -269,9 +296,8 @@ func (r *SalesInvoiceRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
-	if err := checkInvoiceHasNoPayments(r.db, companyID, id); err != nil {
-		return err
-	}
+	// Soft delete (deleted_at). Receipts / payments that were applied keep their own records; the
+	// invoice just leaves the active lists, summaries and outstanding figures.
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesInvoice{}).Error; err != nil {
 		return fmt.Errorf("delete sales invoice %s: %w", id, err)
 	}
@@ -471,11 +497,30 @@ func (r *SalesInvoiceRepository) PreviewNumber(companyID, kind string) (string, 
 	return generateSalesInvoiceNumber(r.db, companyID, model.SalesInvoiceKind(kind), time.Now())
 }
 
-func templateOrDefault(v string) string {
-	if v = strings.TrimSpace(v); v != "" {
+// templateFor: an explicit choice wins; otherwise the company's default for this document type.
+func templateFor(db *gorm.DB, dto *domain.CreateDTO) string {
+	if v := strings.TrimSpace(dto.Template); v != "" {
 		return v
 	}
-	return string(model.DefaultSalesInvoiceTemplate)
+	docType := model.DocTypeSalesInvoice
+	if dto.Kind == string(model.SalesInvoiceKindDownPayment) {
+		docType = model.DocTypeDownPayment
+	}
+	return documentTemplateFor(db, dto.CompanyID, docType)
+}
+
+// SetTemplate changes ONLY the layout of an existing invoice. Allowed in any status: it is
+// presentation, so it never touches lines, totals or the document lifecycle.
+func (r *SalesInvoiceRepository) SetTemplate(companyID, id, actorID, template string) error {
+	res := r.db.Model(&model.SalesInvoice{}).Where("id = ? AND company_id = ?", id, companyID).
+		Updates(map[string]any{"template": template, "updated_at": time.Now(), "updated_by": actorID})
+	if res.Error != nil {
+		return fmt.Errorf("set sales invoice template %s: %w", id, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return &domain.ErrNotFound{ID: id}
+	}
+	return nil
 }
 
 // Summary aggregates the dashboard figures for regular (non down-payment) invoices.
@@ -517,4 +562,26 @@ func (r *SalesInvoiceRepository) Summary(companyID string) (*domain.Summary, err
 		return nil, fmt.Errorf("summary drafts: %w", err)
 	}
 	return out, nil
+}
+
+// CountByKind — how many sales invoices of this Kind ("invoice" or "down_payment") the company has
+// created, ever. Used by the activation milestone ("1 Invoice" — regular invoices only).
+func (r *SalesInvoiceRepository) CountByKind(companyID, kind string) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.SalesInvoice{}).Where("company_id = ? AND kind = ?", companyID, kind).Count(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("count sales invoices: %w", err)
+	}
+	return n, nil
+}
+
+// CountCreatedSince — every sales invoice (both kinds) created on or after `since`. Used for the
+// Free-tier transactions/month limit.
+func (r *SalesInvoiceRepository) CountCreatedSince(companyID string, since time.Time) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.SalesInvoice{}).Where("company_id = ? AND created_at >= ?", companyID, since).Count(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("count sales invoices since: %w", err)
+	}
+	return n, nil
 }

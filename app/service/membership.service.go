@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	domain_activation "duluin_invoice/app/domain/activation"
 	domain "duluin_invoice/app/domain/membership"
 	"duluin_invoice/app/model"
 	"duluin_invoice/app/notification"
@@ -27,6 +28,7 @@ func newInviteToken() string {
 type MembershipConfig struct {
 	UseLocalRBAC          bool
 	RBACMigrationFallback bool
+	ExposeInviteURL       bool   // return the invite link in API responses (non-production only)
 	OwnerRoleID           string // optional pin for the global "Invoice Owner" role id
 }
 
@@ -309,8 +311,9 @@ func (s *MembershipService) Invite(a domain.Actor, companyID string, in domain.I
 	if err != nil {
 		return nil, err
 	}
-	if used >= int64(model.FreeInviteQuota) {
-		return nil, &domain.ErrInviteQuota{Limit: model.FreeInviteQuota}
+	limit := s.userLimit(companyID)
+	if domain_activation.Reached(used, limit) {
+		return nil, &domain.ErrInviteQuota{Limit: limit}
 	}
 
 	now := time.Now()
@@ -334,9 +337,11 @@ func (s *MembershipService) Invite(a domain.Actor, companyID string, in domain.I
 	return m, nil
 }
 
-func (s *MembershipService) sendInviteEmail(ctx context.Context, m *model.UserAccountSSO, a domain.Actor) {
+// sendInviteEmail asks the notifier to email the invitation and returns the link SSO built for it
+// ("" when nothing was sent). A delivery failure never fails the invite (it can be resent) but is logged.
+func (s *MembershipService) sendInviteEmail(ctx context.Context, m *model.UserAccountSSO, a domain.Actor) string {
 	if s.notify == nil {
-		return
+		return ""
 	}
 	companyName := ""
 	if c, err := s.companies.FindByID(m.CompanyID); err == nil && c != nil {
@@ -346,13 +351,18 @@ func (s *MembershipService) sendInviteEmail(ctx context.Context, m *model.UserAc
 	if m.InviteToken != nil {
 		token = *m.InviteToken
 	}
-	_ = s.notify.SendUserInvite(ctx, notification.UserInvite{
+	url, err := s.notify.SendUserInvite(ctx, notification.UserInvite{
 		ToEmail:     m.Email,
 		ToName:      m.Name,
 		InviterName: a.Name,
 		TenantName:  companyName,
 		AcceptURL:   s.acceptURL(token),
 	})
+	if err != nil {
+		log.Printf("[membership] invite email failed to=%s company=%s err=%v", m.Email, m.CompanyID, err)
+		return ""
+	}
+	return url
 }
 
 func (s *MembershipService) acceptURL(token string) string {
@@ -412,6 +422,7 @@ func (s *MembershipService) ListMembers(a domain.Actor, f domain.MemberFilter) (
 	for i := range rows {
 		out = append(out, toMemberView(&rows[i], names))
 	}
+	s.attachCompanies(a, out)
 	return &utils.OffsetPaginationResult{
 		Data:       utils.ToJSONMaps(out),
 		Columns:    domain.MemberListColumns,
@@ -628,5 +639,8 @@ func toMemberView(m *model.UserAccountSSO, names map[string]string) domain.Membe
 		IsBanned:    m.IsBanned,
 		Pending:     m.Pending(),
 		InvitedAt:   invitedAt,
+		Status:      memberStatus(m),
+		Phone:       m.Phone,
+		CreatedAt:   m.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

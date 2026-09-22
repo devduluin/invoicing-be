@@ -57,6 +57,17 @@ type SalesOrder struct {
 	SignatureData string `gorm:"type:text"                  json:"signature_data,omitempty"`
 	StampDuty     bool   `gorm:"not null;default:false"     json:"stamp_duty"`
 
+	// Template is the printable layout (template_1..4). New documents start from the company default.
+	Template string `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
+
+	// Contact person the document was made for. The id is a reference; the four contact_* columns
+	// are a COPY taken when the document is saved, so an edited or deleted contact never changes it.
+	ContactPersonID *string `gorm:"type:uuid;index"          json:"contact_person_id,omitempty"`
+	ContactName     string  `gorm:"type:varchar(255)"        json:"contact_name,omitempty"`
+	ContactPosition string  `gorm:"type:varchar(150)"        json:"contact_position,omitempty"`
+	ContactPhone    string  `gorm:"type:varchar(50)"         json:"contact_phone,omitempty"`
+	ContactEmail    string  `gorm:"type:varchar(150)"        json:"contact_email,omitempty"`
+
 	Lines []SalesOrderLine `gorm:"foreignKey:SalesOrderID" json:"lines,omitempty"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime"   json:"created_at"`

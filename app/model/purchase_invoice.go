@@ -16,13 +16,24 @@ const (
 	PurchaseInvoiceStatusCancelled PurchaseInvoiceStatus = "cancelled"
 )
 
+// PurchaseInvoicePaymentStatus — derived from PaidAmount vs GrandTotal (same rule as sales):
+// unpaid (paid = 0), partially_paid (0 < paid < total), paid (paid >= total).
+type PurchaseInvoicePaymentStatus string
+
+const (
+	PurchaseInvoicePaymentUnpaid        PurchaseInvoicePaymentStatus = "unpaid"
+	PurchaseInvoicePaymentPartiallyPaid PurchaseInvoicePaymentStatus = "partially_paid"
+	PurchaseInvoicePaymentPaid          PurchaseInvoicePaymentStatus = "paid"
+)
+
 // PurchaseInvoice — a vendor's bill, optionally traced back to the Purchase
 // Order it was generated from. Product-facing label is "Purchase Invoice";
 // gated by the SSO-seeded invoice-bill-* permissions (standard AP term for
 // this document — see the Purchase Order/Invoice/Receipt build plan).
 // Unlike SalesInvoice there's no Kind split — no down-payment variant exists
-// on the purchase side. Does not touch accounts/journal entries or track
-// paid/outstanding amounts.
+// on the purchase side. Does not touch accounts/journal entries. Payments are
+// PurchaseReceipts linked to the invoice; they move PaidAmount/PaymentStatus,
+// and the outstanding amount is GrandTotal - PaidAmount.
 type PurchaseInvoice struct {
 	ID              string                `gorm:"type:uuid;primaryKey"       json:"id"`
 	CompanyID       string                `gorm:"type:uuid;not null;index"   json:"company_id"`
@@ -38,6 +49,12 @@ type PurchaseInvoice struct {
 	DiscountTotal   float64               `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
 	TaxTotal        float64               `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
 	GrandTotal      float64               `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
+
+	// Payment tracking, maintained by PurchaseReceipt create/update/delete.
+	PaidAmount    float64                      `gorm:"type:numeric(18,2);not null;default:0" json:"paid_amount"`
+	PaymentStatus PurchaseInvoicePaymentStatus `gorm:"type:varchar(20);not null;default:'unpaid';index" json:"payment_status"`
+	// OutstandingAmount = max(GrandTotal - PaidAmount, 0). Computed on every read, never stored.
+	OutstandingAmount float64 `gorm:"-" json:"outstanding_amount"`
 
 	// Document-level discount applied on top of the line totals, in
 	// addition to any per-line discount — see utils.CalcLines.
@@ -65,6 +82,17 @@ type PurchaseInvoice struct {
 	SignatureData string `gorm:"type:text"                  json:"signature_data,omitempty"`
 	StampDuty     bool   `gorm:"not null;default:false"     json:"stamp_duty"`
 
+	// Template is the printable layout (template_1..4). New documents start from the company default.
+	Template string `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
+
+	// Contact person the document was made for. The id is a reference; the four contact_* columns
+	// are a COPY taken when the document is saved, so an edited or deleted contact never changes it.
+	ContactPersonID *string `gorm:"type:uuid;index"          json:"contact_person_id,omitempty"`
+	ContactName     string  `gorm:"type:varchar(255)"        json:"contact_name,omitempty"`
+	ContactPosition string  `gorm:"type:varchar(150)"        json:"contact_position,omitempty"`
+	ContactPhone    string  `gorm:"type:varchar(50)"         json:"contact_phone,omitempty"`
+	ContactEmail    string  `gorm:"type:varchar(150)"        json:"contact_email,omitempty"`
+
 	Lines []PurchaseInvoiceLine `gorm:"foreignKey:PurchaseInvoiceID" json:"lines,omitempty"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime"   json:"created_at"`
@@ -76,12 +104,21 @@ type PurchaseInvoice struct {
 
 func (PurchaseInvoice) TableName() string { return "purchase_invoices" }
 
+// AfterFind fills the derived outstanding amount on every read.
+func (s *PurchaseInvoice) AfterFind(tx *gorm.DB) error {
+	s.OutstandingAmount = outstandingOf(s.GrandTotal, s.PaidAmount)
+	return nil
+}
+
 func (s *PurchaseInvoice) BeforeCreate(tx *gorm.DB) error {
 	if s.ID == "" {
 		s.ID = uuid.New().String()
 	}
 	if s.Status == "" {
 		s.Status = PurchaseInvoiceStatusDraft
+	}
+	if s.PaymentStatus == "" {
+		s.PaymentStatus = PurchaseInvoicePaymentUnpaid
 	}
 	return nil
 }

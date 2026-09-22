@@ -91,12 +91,20 @@ type SalesInvoice struct {
 	Terms           string           `gorm:"type:text"                  json:"terms,omitempty"`
 	// Template — layout choice, see SalesInvoiceTemplate. Existing rows pick up
 	// the column default (template_1) on migration.
-	Template      string             `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
-	Status        SalesInvoiceStatus `gorm:"type:varchar(20);not null;default:'draft';index" json:"status"`
-	Subtotal      float64            `gorm:"type:numeric(18,2);not null;default:0" json:"subtotal"`
-	DiscountTotal float64            `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
-	TaxTotal      float64            `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
-	GrandTotal    float64            `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
+	Template string `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
+
+	// Contact person the document was made for. The id is a reference; the four contact_* columns
+	// are a COPY taken when the document is saved, so an edited or deleted contact never changes it.
+	ContactPersonID *string            `gorm:"type:uuid;index"          json:"contact_person_id,omitempty"`
+	ContactName     string             `gorm:"type:varchar(255)"        json:"contact_name,omitempty"`
+	ContactPosition string             `gorm:"type:varchar(150)"        json:"contact_position,omitempty"`
+	ContactPhone    string             `gorm:"type:varchar(50)"         json:"contact_phone,omitempty"`
+	ContactEmail    string             `gorm:"type:varchar(150)"        json:"contact_email,omitempty"`
+	Status          SalesInvoiceStatus `gorm:"type:varchar(20);not null;default:'draft';index" json:"status"`
+	Subtotal        float64            `gorm:"type:numeric(18,2);not null;default:0" json:"subtotal"`
+	DiscountTotal   float64            `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
+	TaxTotal        float64            `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
+	GrandTotal      float64            `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
 
 	// Document-level discount applied on top of the line totals, in
 	// addition to any per-line discount — see utils.CalcLines.
@@ -110,8 +118,10 @@ type SalesInvoice struct {
 
 	// Recomputed only by SalesPaymentRepository.Verify — never written
 	// through this invoice's own Create/Update DTOs.
-	PaidAmount    float64                   `gorm:"type:numeric(18,2);not null;default:0" json:"paid_amount"`
-	PaymentStatus SalesInvoicePaymentStatus `gorm:"type:varchar(20);not null;default:'unpaid';index" json:"payment_status"`
+	PaidAmount float64 `gorm:"type:numeric(18,2);not null;default:0" json:"paid_amount"`
+	// OutstandingAmount = max(GrandTotal - PaidAmount, 0). Computed on every read, never stored.
+	OutstandingAmount float64                   `gorm:"-" json:"outstanding_amount"`
+	PaymentStatus     SalesInvoicePaymentStatus `gorm:"type:varchar(20);not null;default:'unpaid';index" json:"payment_status"`
 
 	// Free-text document meta — no Warehouse/Member entity behind these,
 	// deliberately simple fields.
@@ -140,6 +150,12 @@ type SalesInvoice struct {
 }
 
 func (SalesInvoice) TableName() string { return "sales_invoices" }
+
+// AfterFind fills the derived outstanding amount on every read (single, list, after create/update).
+func (s *SalesInvoice) AfterFind(tx *gorm.DB) error {
+	s.OutstandingAmount = outstandingOf(s.GrandTotal, s.PaidAmount)
+	return nil
+}
 
 func (s *SalesInvoice) BeforeCreate(tx *gorm.DB) error {
 	if s.ID == "" {
@@ -182,4 +198,13 @@ func (l *SalesInvoiceLine) BeforeCreate(tx *gorm.DB) error {
 		l.ID = uuid.New().String()
 	}
 	return nil
+}
+
+// Outstanding returns what is still owed: max(total - paid, 0). Never negative, whatever the
+// stored numbers are. Derived, so it can never disagree with PaidAmount / GrandTotal.
+func outstandingOf(total, paid float64) float64 {
+	if v := total - paid; v > 0 {
+		return float64(int64(v*100+0.5)) / 100
+	}
+	return 0
 }
