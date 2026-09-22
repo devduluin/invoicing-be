@@ -1,0 +1,88 @@
+name: invoicing-be
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-12345678}
+      POSTGRES_DB: ${DATABASE_NAME:-invoice_service_db}
+    ports:
+      - "${DATABASE_PORT:-5432}:5432"
+    volumes:
+      - invoicing_be_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres} -d ${DATABASE_NAME:-invoice_service_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-redis123}"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - invoicing_be_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  invoicing-be:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # host.docker.internal is native on Docker Desktop (Windows/Mac); this makes it also
+    # resolve on plain Linux Docker Engine, where it isn't automatic. sso.test is the local
+    # Laragon vhost SSO_URL below points at — Apache routes by Host header, so the container
+    # must resolve that literal hostname (not just host.docker.internal) to reach the right vhost.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "sso.test:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_NAME: invoice-service
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: 8090
+
+      DATABASE_DRIVER: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${DATABASE_USER:-postgres}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-12345678}
+      DATABASE_NAME: ${DATABASE_NAME:-invoice_service_db}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      REDIS_DB: 0
+
+      # SSO/Launchpad are separate products, not part of this compose file.
+      SSO_ACCOUNT_TYPE: duluin_invoice
+      SSO_URL: ${SSO_URL:-http://sso.test/api}
+      LAUNCHPAD_URL: ${LAUNCHPAD_URL:-http://host.docker.internal:3000}
+      INVOICE_WEB_URL: ${INVOICE_WEB_URL:-http://localhost:3010}
+
+      BANK_META_URL: ${BANK_META_URL:-https://dev-dashboard.duluin.com/api/meta/bank}
+
+      API_KEY: ${API_KEY:-}
+      USE_LOCAL_RBAC: ${USE_LOCAL_RBAC:-true}
+      RBAC_MIGRATION_FALLBACK: ${RBAC_MIGRATION_FALLBACK:-true}
+      INVOICE_OWNER_ROLE_ID: ${INVOICE_OWNER_ROLE_ID:-}
+
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3010,http://localhost:9996}
+    ports:
+      - "${INVOICE_BE_PORT:-8090}:8090"
+
+volumes:
+  invoicing_be_postgres_data:
+  invoicing_be_redis_data:

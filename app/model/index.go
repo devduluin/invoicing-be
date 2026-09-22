@@ -122,14 +122,10 @@ func ensurePartialIndexes(db *gorm.DB) error {
 		 ON sales_orders (company_id, lower(number)) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sales_order_lines_order
 		 ON sales_order_lines (sales_order_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_sales_order_lines_tax
-		 ON sales_order_lines (tax_id) WHERE tax_id IS NOT NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_invoices_company_number_active
 		 ON sales_invoices (company_id, lower(number)) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sales_invoice_lines_invoice
 		 ON sales_invoice_lines (sales_invoice_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_sales_invoice_lines_tax
-		 ON sales_invoice_lines (tax_id) WHERE tax_id IS NOT NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_receipts_company_number_active
 		 ON sales_receipts (company_id, lower(number)) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sales_receipt_allocations_receipt
