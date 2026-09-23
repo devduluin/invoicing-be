@@ -19,7 +19,7 @@ const (
 	SalesInvoiceKindDownPayment SalesInvoiceKind = "down_payment"
 )
 
-// SalesInvoiceTemplate — which of the four printable layouts this invoice uses
+// SalesInvoiceTemplate — which of the seven printable layouts this invoice uses
 // (create/edit preview, detail page and the PDF all render the same one).
 // Stored per invoice; presentation only, never affects amounts.
 type SalesInvoiceTemplate string
@@ -29,13 +29,17 @@ const (
 	SalesInvoiceTemplate2 SalesInvoiceTemplate = "template_2"
 	SalesInvoiceTemplate3 SalesInvoiceTemplate = "template_3"
 	SalesInvoiceTemplate4 SalesInvoiceTemplate = "template_4"
+	SalesInvoiceTemplate5 SalesInvoiceTemplate = "template_5"
+	SalesInvoiceTemplate6 SalesInvoiceTemplate = "template_6"
+	SalesInvoiceTemplate7 SalesInvoiceTemplate = "template_7"
 
 	DefaultSalesInvoiceTemplate = SalesInvoiceTemplate1
 )
 
 func IsValidSalesInvoiceTemplate(v string) bool {
 	switch SalesInvoiceTemplate(v) {
-	case SalesInvoiceTemplate1, SalesInvoiceTemplate2, SalesInvoiceTemplate3, SalesInvoiceTemplate4:
+	case SalesInvoiceTemplate1, SalesInvoiceTemplate2, SalesInvoiceTemplate3, SalesInvoiceTemplate4,
+		SalesInvoiceTemplate5, SalesInvoiceTemplate6, SalesInvoiceTemplate7:
 		return true
 	default:
 		return false

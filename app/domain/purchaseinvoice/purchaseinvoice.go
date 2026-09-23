@@ -46,7 +46,7 @@ type CreateDTO struct {
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
 	SignatureData  string `json:"signature_data"  validate:"omitempty"`
 	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
-	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
@@ -73,7 +73,7 @@ type UpdateDTO struct {
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
 	SignatureData  string `json:"signature_data"  validate:"omitempty"`
 	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
-	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 

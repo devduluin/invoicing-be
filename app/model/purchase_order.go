@@ -55,7 +55,7 @@ type PurchaseOrder struct {
 	SignatureData string `gorm:"type:text"                  json:"signature_data,omitempty"`
 	StampDuty     bool   `gorm:"not null;default:false"     json:"stamp_duty"`
 
-	// Template is the printable layout (template_1..4). New documents start from the company default.
+	// Template is the printable layout (template_1..7). New documents start from the company default.
 	Template string `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
 
 	// Contact person the document was made for. The id is a reference; the four contact_* columns

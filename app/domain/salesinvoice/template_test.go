@@ -19,12 +19,12 @@ func validDTO(template string) *domain.CreateDTO {
 }
 
 func TestCreateDTO_TemplateValidation(t *testing.T) {
-	for _, tpl := range []string{"", "template_1", "template_2", "template_3", "template_4"} {
+	for _, tpl := range []string{"", "template_1", "template_2", "template_3", "template_4", "template_5", "template_6", "template_7"} {
 		if msgs := validation.Struct(validDTO(tpl)); msgs != nil {
 			t.Errorf("template %q should be valid, got %v", tpl, msgs)
 		}
 	}
-	for _, tpl := range []string{"template_5", "Template_1", "classic", "template_1; DROP"} {
+	for _, tpl := range []string{"template_8", "Template_1", "classic", "template_1; DROP"} {
 		if msgs := validation.Struct(validDTO(tpl)); msgs == nil {
 			t.Errorf("template %q should be rejected", tpl)
 		}

@@ -37,7 +37,7 @@ type CreateDTO struct {
 	RefNo           string  `json:"ref_no"         validate:"omitempty,max=100"`
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
-	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
@@ -70,7 +70,7 @@ type UpdateDTO struct {
 	RefNo           string  `json:"ref_no"         validate:"omitempty,max=100"`
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
-	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4"`
+	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 

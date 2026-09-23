@@ -6,7 +6,7 @@ import "duluin_invoice/app/model"
 
 // SetDTO — the template to use by default.
 type SetDTO struct {
-	Template string `json:"template" validate:"required,oneof=template_1 template_2 template_3 template_4"`
+	Template string `json:"template" validate:"required,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 }
 
 // Item — one document type with its effective default (template_1 when the company never set one).

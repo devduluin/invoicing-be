@@ -140,7 +140,7 @@ func salesOrderErr(c *fiber.Ctx, err error) error {
 }
 
 type setSalesOrderTemplateDTO struct {
-	Template string `json:"template" validate:"required,oneof=template_1 template_2 template_3 template_4"`
+	Template string `json:"template" validate:"required,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 }
 
 func (ctrl *SalesOrderController) SetTemplate(c *fiber.Ctx) error {
