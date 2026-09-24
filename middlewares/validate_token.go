@@ -9,7 +9,10 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -92,8 +95,16 @@ func ValidateTokenForAccount(accountType string) fiber.Handler {
 
 		tokenData, found := getCachedToken(cacheKey)
 		if !found {
-			var err error
-			tokenData, err = validateWithSSO(authHeader, activeCompanyID, accountType, requestID)
+			// A page fires several API calls at once with the SAME token + company; without this each
+			// one made its own SSO round-trip, so one slow SSO reply stalled all of them together
+			// (and each then retried). One in-flight validation per cache key, shared by every waiter.
+			v, err, _ := ssoFlight.Do(cacheKey, func() (interface{}, error) {
+				return validateWithSSO(authHeader, activeCompanyID, accountType, requestID)
+			})
+			if err == nil {
+				shared := *(v.(*CachedTokenData)) // private copy: callers mutate CompanyID below
+				tokenData = &shared
+			}
 			if err != nil {
 				// Only an SSO verdict that the token is dead is a 401 (the frontend
 				// logs the user out on 401). Anything else — timeout, 5xx, 429,
@@ -143,7 +154,13 @@ const ssoTransientRetries = 1
 func validateWithSSO(authHeader, activeCompanyID, accountType, requestID string) (*CachedTokenData, error) {
 	var lastErr error
 	for attempt := 0; attempt <= ssoTransientRetries; attempt++ {
+		started := time.Now()
 		data, err := validateWithSSOOnce(authHeader, activeCompanyID, accountType, requestID)
+		// Every SSO round-trip is on the critical path of EVERY request when the token cache is
+		// cold or Redis is down, so a slow/failed one must be visible with its duration.
+		if d := time.Since(started); d > time.Second || err != nil {
+			log.Printf("[ValidateToken] request_id=%s sso_call attempt=%d duration=%s err=%v", requestID, attempt+1, d.Round(time.Millisecond), err)
+		}
 		if err == nil || !isTransientSSOError(err) {
 			return data, err
 		}
@@ -233,9 +250,51 @@ func validateWithSSOOnce(authHeader, activeCompanyID, accountType, requestID str
 
 // ── cache ───────────────────────────────────────────────────────────────────
 
+// Process-local fallback for when Redis is down/unconfigured — same 5-minute TTL as the Redis cache,
+// so the verdict is exactly as fresh either way; it just stops every request paying an SSO trip.
+type localTokenEntry struct {
+	data    CachedTokenData
+	expires time.Time
+}
+
+var (
+	ssoFlight  singleflight.Group
+	localMu    sync.Mutex
+	localCache = map[string]localTokenEntry{}
+)
+
+func getLocalToken(key string) (*CachedTokenData, bool) {
+	localMu.Lock()
+	defer localMu.Unlock()
+	e, ok := localCache[key]
+	if !ok || time.Now().After(e.expires) {
+		delete(localCache, key)
+		return nil, false
+	}
+	d := e.data
+	return &d, true
+}
+
+func setLocalToken(key string, data *CachedTokenData) {
+	localMu.Lock()
+	defer localMu.Unlock()
+	if len(localCache) > 5000 { // bound memory: drop expired, else reset
+		now := time.Now()
+		for k, e := range localCache {
+			if now.After(e.expires) {
+				delete(localCache, k)
+			}
+		}
+		if len(localCache) > 5000 {
+			localCache = map[string]localTokenEntry{}
+		}
+	}
+	localCache[key] = localTokenEntry{data: *data, expires: time.Now().Add(tokenCacheTTL)}
+}
+
 func getCachedToken(key string) (*CachedTokenData, bool) {
 	if database.Redis == nil {
-		return nil, false
+		return getLocalToken(key)
 	}
 	raw, err := database.Redis.Get(context.Background(), key).Result()
 	if err != nil || raw == "" {
@@ -249,7 +308,11 @@ func getCachedToken(key string) (*CachedTokenData, bool) {
 }
 
 func setCachedToken(key string, data *CachedTokenData) {
-	if database.Redis == nil || data == nil {
+	if data == nil {
+		return
+	}
+	if database.Redis == nil {
+		setLocalToken(key, data)
 		return
 	}
 	if payload, err := json.Marshal(data); err == nil {
