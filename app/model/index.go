@@ -143,6 +143,39 @@ func ensurePartialIndexes(db *gorm.DB) error {
 		 ON contact_persons (mitra_id, lower(name), lower(coalesce(email, '')), coalesce(phone, '')) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_contact_persons_mitra_active
 		 ON contact_persons (mitra_id) WHERE deleted_at IS NULL`,
+
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_orders_company_number_active
+		 ON purchase_orders (company_id, lower(number)) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_invoices_company_number_active
+		 ON purchase_invoices (company_id, lower(number)) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_receipts_company_number_active
+		 ON purchase_receipts (company_id, lower(number)) WHERE deleted_at IS NULL`,
+
+		`CREATE INDEX IF NOT EXISTS idx_sales_orders_company_status_active
+		 ON sales_orders (company_id, status) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_orders_company_mitra_active
+		 ON sales_orders (company_id, mitra_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_purchase_orders_company_status_active
+		 ON purchase_orders (company_id, status) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_purchase_orders_company_mitra_active
+		 ON purchase_orders (company_id, mitra_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_invoices_company_status_active
+		 ON sales_invoices (company_id, status) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_invoices_company_mitra_active
+		 ON sales_invoices (company_id, mitra_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_invoices_company_payment_status_active
+		 ON sales_invoices (company_id, payment_status) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_purchase_invoices_company_status_active
+		 ON purchase_invoices (company_id, status) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_purchase_invoices_company_mitra_active
+		 ON purchase_invoices (company_id, mitra_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_purchase_invoices_company_payment_status_active
+		 ON purchase_invoices (company_id, payment_status) WHERE deleted_at IS NULL`,
+
+		`CREATE INDEX IF NOT EXISTS idx_sales_invoices_overdue
+		 ON sales_invoices (company_id, status, due_date) WHERE deleted_at IS NULL AND due_date IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_purchase_invoices_overdue
+		 ON purchase_invoices (company_id, status, due_date) WHERE deleted_at IS NULL AND due_date IS NOT NULL`,
 	}
 	for _, s := range stmts {
 		if err := db.Exec(s).Error; err != nil {

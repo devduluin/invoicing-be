@@ -242,6 +242,7 @@ func (r *SalesOrderRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginatio
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         salesOrderListColumns,
+		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
 	})
 }

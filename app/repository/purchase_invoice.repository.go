@@ -273,6 +273,7 @@ func (r *PurchaseInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         purchaseInvoiceListColumns,
+		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
 	})
 }

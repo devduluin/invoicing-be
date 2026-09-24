@@ -124,6 +124,7 @@ func (r *DeliveryNoteRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         deliveryNoteListColumns,
+		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
 	})
 }

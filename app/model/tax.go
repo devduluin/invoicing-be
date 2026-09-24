@@ -125,32 +125,32 @@ func DefaultTaxes() []TaxSeed {
 		preFin = "110505"
 	)
 	return []TaxSeed{
-		// ── VAT ──
-		{"VAT 11%", TaxKindPPN, TaxCalcExclusive, 11, vatOut, vatIn},
-		{"VAT 0% Export", TaxKindPPN, TaxCalcExclusive, 0, vatOut, vatIn},
+		// ── PPN ──
+		{"PPN 11%", TaxKindPPN, TaxCalcExclusive, 11, vatOut, vatIn},
+		{"PPN 0% Ekspor", TaxKindPPN, TaxCalcExclusive, 0, vatOut, vatIn},
 
-		// ── Withholding Tax Art. 23 ──
-		{"WHT Art. 23 Services (2%)", TaxKindPPh, TaxCalcExclusive, 2, pre23, pay23},
-		{"WHT Art. 23 Rent (2%)", TaxKindPPh, TaxCalcExclusive, 2, pre23, pay23},
-		{"WHT Art. 23 Royalty (15%)", TaxKindPPh, TaxCalcExclusive, 15, pre23, pay23},
-		{"WHT Art. 23 Dividend (15%)", TaxKindPPh, TaxCalcExclusive, 15, pre23, pay23},
-		{"WHT Art. 23 Interest (15%)", TaxKindPPh, TaxCalcExclusive, 15, pre23, pay23},
+		// ── PPh Pasal 23 ──
+		{"PPh 23 Jasa (2%)", TaxKindPPh, TaxCalcExclusive, 2, pre23, pay23},
+		{"PPh 23 Sewa (2%)", TaxKindPPh, TaxCalcExclusive, 2, pre23, pay23},
+		{"PPh 23 Royalti (15%)", TaxKindPPh, TaxCalcExclusive, 15, pre23, pay23},
+		{"PPh 23 Dividen (15%)", TaxKindPPh, TaxCalcExclusive, 15, pre23, pay23},
+		{"PPh 23 Bunga (15%)", TaxKindPPh, TaxCalcExclusive, 15, pre23, pay23},
 
-		// ── Withholding Tax Art. 22 ──
-		{"WHT Art. 22 Import (API) (2.5%)", TaxKindPPh, TaxCalcExclusive, 2.5, pre22, pay22},
-		{"WHT Art. 22 Import (Non-API) (7.5%)", TaxKindPPh, TaxCalcExclusive, 7.5, pre22, pay22},
+		// ── PPh Pasal 22 ──
+		{"PPh 22 Impor API (2,5%)", TaxKindPPh, TaxCalcExclusive, 2.5, pre22, pay22},
+		{"PPh 22 Impor Non-API (7,5%)", TaxKindPPh, TaxCalcExclusive, 7.5, pre22, pay22},
 
-		// ── Withholding Tax Art. 26 ──
-		{"WHT Art. 26 Dividend (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
-		{"WHT Art. 26 Interest (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
-		{"WHT Art. 26 Royalty (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
-		{"WHT Art. 26 Services (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
+		// ── PPh Pasal 26 ──
+		{"PPh 26 Dividen (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
+		{"PPh 26 Bunga (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
+		{"PPh 26 Royalti (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
+		{"PPh 26 Jasa (20%)", TaxKindPPh, TaxCalcExclusive, 20, pre26, pay26},
 
-		// ── Final Withholding Tax Art. 4(2) ──
-		{"Final WHT Land & Building Rent (10%)", TaxKindPPh, TaxCalcExclusive, 10, preFin, payFin},
-		{"Final WHT Deposit Interest (20%)", TaxKindPPh, TaxCalcExclusive, 20, preFin, payFin},
-		{"Final WHT Small Construction Services (2%)", TaxKindPPh, TaxCalcExclusive, 2, preFin, payFin},
-		{"Final WHT Medium/Large Construction Services (3%)", TaxKindPPh, TaxCalcExclusive, 3, preFin, payFin},
-		{"Final WHT Land & Building Rights Transfer (2.5%)", TaxKindPPh, TaxCalcExclusive, 2.5, preFin, payFin},
+		// ── PPh Final Pasal 4(2) ──
+		{"PPh Final Sewa Tanah & Bangunan (10%)", TaxKindPPh, TaxCalcExclusive, 10, preFin, payFin},
+		{"PPh Final Bunga Deposito (20%)", TaxKindPPh, TaxCalcExclusive, 20, preFin, payFin},
+		{"PPh Final Jasa Konstruksi Kecil (2%)", TaxKindPPh, TaxCalcExclusive, 2, preFin, payFin},
+		{"PPh Final Jasa Konstruksi Menengah/Besar (3%)", TaxKindPPh, TaxCalcExclusive, 3, preFin, payFin},
+		{"PPh Final Pengalihan Hak Tanah & Bangunan (2,5%)", TaxKindPPh, TaxCalcExclusive, 2.5, preFin, payFin},
 	}
 }

@@ -120,6 +120,7 @@ func (r *GoodsReceiptRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         goodsReceiptListColumns,
+		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
 	})
 }

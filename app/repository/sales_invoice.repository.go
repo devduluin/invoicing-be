@@ -285,6 +285,7 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         salesInvoiceListColumns,
+		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
 	})
 }

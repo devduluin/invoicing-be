@@ -242,6 +242,7 @@ func (r *PurchaseOrderRepository) FindAll(f *domain.Filter) (*utils.OffsetPagina
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         purchaseOrderListColumns,
+		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
 	})
 }

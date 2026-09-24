@@ -142,6 +142,29 @@ func (r *ConnectedDocumentRepository) purchaseOrder(company, id string) (*connRo
 	return &rows[0], nil
 }
 
+// salesOrdersByIDs — batched form of salesOrder for a set of rows that each reference (at most)
+// one sales order, so a fan-out of N invoices never costs N extra round-trips (one IN query
+// instead). Used where the caller previously looped calling salesOrder() per row.
+func (r *ConnectedDocumentRepository) salesOrdersByIDs(company string, ids []string) ([]connRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return r.rows(&model.SalesOrder{}, "id, number, date, status, grand_total as amount", company, "id IN ?", ids)
+}
+
+// salesOrderIDs collects the distinct, non-nil SalesOrderID across a set of invoice rows.
+func salesOrderIDs(rows []connRow) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.SalesOrderID != nil && !seen[*r.SalesOrderID] {
+			seen[*r.SalesOrderID] = true
+			out = append(out, *r.SalesOrderID)
+		}
+	}
+	return out
+}
+
 // receiptsForInvoices — sales receipts that allocate money to any of the given invoices.
 func (r *ConnectedDocumentRepository) receiptsForInvoices(company string, invoiceIDs []string) ([]connRow, error) {
 	if len(invoiceIDs) == 0 {
@@ -250,14 +273,14 @@ func (r *ConnectedDocumentRepository) List(companyID, docType, id string) ([]Con
 				return nil, err
 			}
 			r.addSalesInvoices(c, more)
-			for _, row := range append(invs, more...) {
-				if row.SalesOrderID != nil {
-					if so, err := r.salesOrder(companyID, *row.SalesOrderID); err != nil {
-						return nil, err
-					} else if so != nil {
-						c.add(ConnSalesOrder, *so, true, true, false)
-					}
-				}
+			// One batched lookup for every referenced sales order, instead of one query per
+			// invoice row (was O(N) round-trips for N allocated/linked invoices).
+			sos, err := r.salesOrdersByIDs(companyID, salesOrderIDs(append(invs, more...)))
+			if err != nil {
+				return nil, err
+			}
+			for _, so := range sos {
+				c.add(ConnSalesOrder, so, true, true, false)
 			}
 		}
 
