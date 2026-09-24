@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"golang.org/x/sync/singleflight"
 	"time"
 
 	domain_activation "duluin_invoice/app/domain/activation"
@@ -156,6 +158,8 @@ func (s *MembershipService) applySSOFallback(res *domain.AccessResolution, roles
 	res.Permissions = dedupeStrings(perms)
 }
 
+var roleFlight singleflight.Group
+
 // resolveRolePermissions reads role→perms with a 10m Redis cache and one retry
 // on a temporary SSO error.
 func (s *MembershipService) resolveRolePermissions(ctx context.Context, roleID, companyID, token string) (perms []string, name string, err error) {
@@ -166,13 +170,19 @@ func (s *MembershipService) resolveRolePermissions(ctx context.Context, roleID, 
 		return cached.Permissions, cached.RoleName, nil
 	}
 
-	rp, err := s.sso.GetRolePermissions(ctx, roleID, companyID, token)
-	if err != nil && ssoIsTemporary(err) {
-		rp, err = s.sso.GetRolePermissions(ctx, roleID, companyID, token)
-	}
+	// A page fires several requests at once for the same role; share ONE SSO fetch between them
+	// instead of each making (and each retrying) its own.
+	v, err, _ := roleFlight.Do(key, func() (interface{}, error) {
+		rp, err := s.sso.GetRolePermissions(ctx, roleID, companyID, token)
+		if err != nil && ssoIsTemporary(err) {
+			rp, err = s.sso.GetRolePermissions(ctx, roleID, companyID, token)
+		}
+		return rp, err
+	})
 	if err != nil {
 		return nil, "", err
 	}
+	rp := v.(sso.RolePermissions)
 
 	perms = dedupeStrings(rp.Permissions)
 	name = rp.RoleName
