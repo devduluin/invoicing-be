@@ -50,6 +50,9 @@ func (r *PurchaseInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Li
 
 	var invoiceID string
 	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if err := checkPurchaseInvoiceOrder(tx, dto.CompanyID, "", trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
+			return err
+		}
 		n := number
 		if n == "" {
 			gen, err := generatePurchaseInvoiceNumber(tx, dto.CompanyID, date)
@@ -144,6 +147,9 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 		} else if exists {
 			return nil, &domain.ErrNumberExists{Number: number}
 		}
+	}
+	if err := checkPurchaseInvoiceOrder(r.db, companyID, id, trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
+		return nil, err
 	}
 
 	err = r.db.Transaction(func(tx *gorm.DB) error {

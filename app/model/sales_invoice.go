@@ -97,6 +97,9 @@ type SalesInvoice struct {
 	// the column default (template_1) on migration.
 	Template string `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
 
+	// PaymentTerm — Terms of Payment chosen for this document (cod, net_7 … net_60, custom); empty = none.
+	PaymentTerm string `gorm:"type:varchar(20);not null;default:''" json:"payment_term"`
+
 	// Contact person the document was made for. The id is a reference; the four contact_* columns
 	// are a COPY taken when the document is saved, so an edited or deleted contact never changes it.
 	ContactPersonID *string            `gorm:"type:uuid;index"          json:"contact_person_id,omitempty"`
@@ -123,7 +126,11 @@ type SalesInvoice struct {
 	// Recomputed only by SalesPaymentRepository.Verify — never written
 	// through this invoice's own Create/Update DTOs.
 	PaidAmount float64 `gorm:"type:numeric(18,2);not null;default:0" json:"paid_amount"`
-	// OutstandingAmount = max(GrandTotal - PaidAmount, 0). Computed on every read, never stored.
+	// AppliedDPAmount — sum of the CONFIRMED down-payment invoices linked to this invoice. Derived
+	// from those documents and recomputed by the repository whenever one is confirmed, reverted,
+	// cancelled, deleted, re-linked or re-priced — never written through the invoice's own DTOs.
+	AppliedDPAmount float64 `gorm:"column:applied_dp_amount;type:numeric(18,2);not null;default:0" json:"applied_dp_amount"`
+	// OutstandingAmount = max(GrandTotal - AppliedDPAmount - PaidAmount, 0). Computed on every read, never stored.
 	OutstandingAmount float64                   `gorm:"-" json:"outstanding_amount"`
 	PaymentStatus     SalesInvoicePaymentStatus `gorm:"type:varchar(20);not null;default:'unpaid';index" json:"payment_status"`
 
@@ -157,7 +164,7 @@ func (SalesInvoice) TableName() string { return "sales_invoices" }
 
 // AfterFind fills the derived outstanding amount on every read (single, list, after create/update).
 func (s *SalesInvoice) AfterFind(tx *gorm.DB) error {
-	s.OutstandingAmount = outstandingOf(s.GrandTotal, s.PaidAmount)
+	s.OutstandingAmount, _ = SalesBalance(s.GrandTotal, s.AppliedDPAmount, s.PaidAmount)
 	return nil
 }
 
@@ -212,3 +219,22 @@ func outstandingOf(total, paid float64) float64 {
 	}
 	return 0
 }
+
+// SalesBalance is THE formula for a sales invoice: Outstanding = Total - Applied Down Payment - Paid,
+// never negative. It also derives the payment status from the same numbers so the two can't disagree.
+// Every read, payment, receipt, down payment and summary goes through this (or the SQL twin in
+// SalesOutstandingSQL).
+func SalesBalance(total, appliedDP, paid float64) (float64, SalesInvoicePaymentStatus) {
+	outstanding := outstandingOf(total-appliedDP, paid)
+	switch {
+	case outstanding <= 0 && total > 0:
+		return outstanding, SalesInvoicePaymentPaid
+	case paid > 0 || appliedDP > 0:
+		return outstanding, SalesInvoicePaymentPartiallyPaid
+	default:
+		return outstanding, SalesInvoicePaymentUnpaid
+	}
+}
+
+// SalesOutstandingSQL is SalesBalance's outstanding as a SQL expression, for aggregates.
+const SalesOutstandingSQL = "GREATEST(grand_total - applied_dp_amount - paid_amount, 0)"

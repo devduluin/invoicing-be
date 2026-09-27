@@ -7,9 +7,10 @@ type CreateMitraDTO struct {
 	CompanyID   string `json:"-"`
 	Type        string `json:"type" validate:"required,oneof=customer supplier both"`
 	Name        string `json:"name" validate:"required,max=255"`
-	ContactName string `json:"contact_name" validate:"omitempty,max=255"`
-	Email       string `json:"email" validate:"omitempty,email,max=150"`
-	Phone       string `json:"phone" validate:"omitempty,max=50"`
+	ContactName string `json:"contact_name" validate:"required,max=255"`
+	// PIC email and phone are required: the partner's first contact person is generated from them.
+	Email       string `json:"email" validate:"required,email,max=150"`
+	Phone       string `json:"phone" validate:"required,max=50"`
 	Npwp        string `json:"npwp" validate:"omitempty,max=50"`
 	Address     string `json:"address" validate:"omitempty"`
 	IsActive    *bool  `json:"is_active"`

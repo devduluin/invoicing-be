@@ -18,6 +18,29 @@ func TestOutstandingOf(t *testing.T) {
 	}
 }
 
+func TestSalesBalance(t *testing.T) {
+	const m = 1_000_000.0
+	cases := []struct {
+		name                 string
+		total, dp, paid, out float64
+		status               SalesInvoicePaymentStatus
+	}{
+		{"nothing yet", 10 * m, 0, 0, 10 * m, SalesInvoicePaymentUnpaid},
+		{"DP only", 10 * m, 3 * m, 0, 7 * m, SalesInvoicePaymentPartiallyPaid},
+		{"DP + payment", 10 * m, 3 * m, 2 * m, 5 * m, SalesInvoicePaymentPartiallyPaid},
+		{"payment only", 10 * m, 0, 4 * m, 6 * m, SalesInvoicePaymentPartiallyPaid},
+		{"DP + rest paid", 10 * m, 3 * m, 7 * m, 0, SalesInvoicePaymentPaid},
+		{"never negative", 10 * m, 6 * m, 6 * m, 0, SalesInvoicePaymentPaid},
+		{"zero invoice", 0, 0, 0, 0, SalesInvoicePaymentUnpaid},
+	}
+	for _, c := range cases {
+		out, st := SalesBalance(c.total, c.dp, c.paid)
+		if out != c.out || st != c.status {
+			t.Errorf("%s: got %v/%s, want %v/%s", c.name, out, st, c.out, c.status)
+		}
+	}
+}
+
 func TestInvoiceAfterFindSetsOutstanding(t *testing.T) {
 	s := &SalesInvoice{GrandTotal: 10000000, PaidAmount: 4000000}
 	_ = s.AfterFind(nil)

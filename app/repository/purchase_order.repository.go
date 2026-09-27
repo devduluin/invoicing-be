@@ -254,6 +254,9 @@ func (r *PurchaseOrderRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
+	if err := checkPurchaseOrderUnused(r.db, companyID, id); err != nil {
+		return err
+	}
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseOrder{}).Error; err != nil {
 		return fmt.Errorf("delete purchase order %s: %w", id, err)
 	}

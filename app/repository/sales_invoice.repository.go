@@ -87,6 +87,7 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 			SignatureData:            dto.SignatureData,
 			StampDuty:                dto.StampDuty,
 			Template:                 templateFor(tx, dto),
+			PaymentTerm:              dto.PaymentTerm,
 			CreatedBy:                actorID,
 			UpdatedBy:                actorID,
 		}
@@ -98,8 +99,30 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 			return err
 		}
 		invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
+		// order → invoice → down payment: a DP made from an order that already has an invoice applies to it.
+		if invoice.Kind == model.SalesInvoiceKindDownPayment && invoice.LinkedInvoiceID == nil {
+			target, err := invoiceOfOrder(tx, dto.CompanyID, invoice.SalesOrderID)
+			if err != nil {
+				return err
+			}
+			invoice.LinkedInvoiceID = target
+		}
+		if err := checkSalesInvoiceLinks(tx, dto.CompanyID, "", invoice.Kind, invoice.SalesOrderID, invoice.LinkedInvoiceID, calc.GrandTotal); err != nil {
+			return err
+		}
 		if err := tx.Create(invoice).Error; err != nil {
 			return fmt.Errorf("create sales invoice: %w", err)
+		}
+		if invoice.Kind == model.SalesInvoiceKindInvoice {
+			if err := adoptSalesOrderDownPayments(tx, dto.CompanyID, invoice.ID, invoice.SalesOrderID); err != nil {
+				return err
+			}
+			if err := adoptReferencedDownPayment(tx, dto.CompanyID, invoice.ID, invoice.LinkedInvoiceID); err != nil {
+				return err
+			}
+			if err := syncSalesInvoiceBalance(tx, dto.CompanyID, invoice.ID); err != nil {
+				return err
+			}
 		}
 		lines := buildSalesInvoiceLines(calc.Lines, dto.CompanyID, invoice.ID)
 		if err := tx.Create(&lines).Error; err != nil {
@@ -151,14 +174,26 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 	}
 
 	err = r.db.Transaction(func(tx *gorm.DB) error {
+		linked := trimPtr(dto.LinkedInvoiceID)
+		if existing.Kind == model.SalesInvoiceKindDownPayment && linked == nil {
+			target, err := invoiceOfOrder(tx, companyID, trimPtr(dto.SalesOrderID))
+			if err != nil {
+				return err
+			}
+			linked = target
+		}
+		if err := checkSalesInvoiceLinks(tx, companyID, id, existing.Kind, trimPtr(dto.SalesOrderID), linked, calc.GrandTotal); err != nil {
+			return err
+		}
 		updates := map[string]any{
 			"sales_order_id":             trimPtr(dto.SalesOrderID),
-			"linked_invoice_id":          trimPtr(dto.LinkedInvoiceID),
+			"linked_invoice_id":          linked,
 			"mitra_id":                   dto.MitraID,
 			"number":                     number,
 			"date":                       date,
 			"due_date":                   dueDate,
 			"ref_no":                     strings.TrimSpace(dto.RefNo),
+			"payment_term":               dto.PaymentTerm,
 			"notes":                      utils.SanitizeRichText(dto.Notes),
 			"terms":                      utils.SanitizeRichText(dto.Terms),
 			"subtotal":                   calc.Subtotal,
@@ -200,10 +235,26 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update sales invoice %s: %w", id, err)
 		}
-		// The total may have changed: paid stays as recorded, so re-derive the payment status
-		// (outstanding = max(total - paid, 0) is derived on read).
-		if err := refreshSalesInvoicePaymentStatus(tx, companyID, id); err != nil {
-			return err
+		// The total, the source order or the linked invoice may have changed: rebuild the derived
+		// balance of this invoice, and of the invoice a down payment used to / now points at.
+		if existing.Kind == model.SalesInvoiceKindInvoice {
+			if err := adoptSalesOrderDownPayments(tx, companyID, id, trimPtr(dto.SalesOrderID)); err != nil {
+				return err
+			}
+			if err := adoptReferencedDownPayment(tx, companyID, id, linked); err != nil {
+				return err
+			}
+			if err := syncSalesInvoiceBalance(tx, companyID, id); err != nil {
+				return err
+			}
+		} else {
+			for _, target := range []*string{existing.LinkedInvoiceID, linked} {
+				if target != nil {
+					if err := syncSalesInvoiceBalance(tx, companyID, *target); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if err := deleteSalesInvoiceLineTaxes(tx, id); err != nil {
 			return err
@@ -294,15 +345,22 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 // purpose: hard-deleting them would leave a "deleted" document that can never be
 // audited or restored intact. Nothing reads lines except through a live parent.
 func (r *SalesInvoiceRepository) Delete(companyID, id string) error {
-	if _, err := r.FindByID(companyID, id); err != nil {
+	existing, err := r.FindByID(companyID, id)
+	if err != nil {
 		return err
 	}
 	// Soft delete (deleted_at). Receipts / payments that were applied keep their own records; the
-	// invoice just leaves the active lists, summaries and outstanding figures.
-	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesInvoice{}).Error; err != nil {
-		return fmt.Errorf("delete sales invoice %s: %w", id, err)
-	}
-	return nil
+	// invoice just leaves the active lists, summaries and outstanding figures. A deleted down payment
+	// stops reducing the invoice it was applied to.
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesInvoice{}).Error; err != nil {
+			return fmt.Errorf("delete sales invoice %s: %w", id, err)
+		}
+		if existing.Kind == model.SalesInvoiceKindDownPayment && existing.LinkedInvoiceID != nil {
+			return syncSalesInvoiceBalance(tx, companyID, *existing.LinkedInvoiceID)
+		}
+		return nil
+	})
 }
 
 func (r *SalesInvoiceRepository) SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error {
@@ -313,15 +371,29 @@ func (r *SalesInvoiceRepository) SetStatus(companyID, id, actorID string, status
 			return err
 		}
 	}
-	res := r.db.Model(&model.SalesInvoice{}).Where("id = ? AND company_id = ?", id, companyID).
-		Updates(map[string]any{"status": status, "updated_at": time.Now(), "updated_by": actorID})
-	if res.Error != nil {
-		return fmt.Errorf("set sales invoice status %s: %w", id, res.Error)
-	}
-	if res.RowsAffected == 0 {
-		return &domain.ErrNotFound{ID: id}
-	}
-	return nil
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var doc model.SalesInvoice
+		if err := tx.Where("id = ? AND company_id = ?", id, companyID).First(&doc).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return &domain.ErrNotFound{ID: id}
+			}
+			return fmt.Errorf("find sales invoice %s: %w", id, err)
+		}
+		// Confirming a down payment is the moment it starts reducing the invoice, so re-check it fits.
+		if status == model.SalesInvoiceStatusConfirmed && doc.Kind == model.SalesInvoiceKindDownPayment {
+			if err := checkSalesInvoiceLinks(tx, companyID, id, doc.Kind, doc.SalesOrderID, doc.LinkedInvoiceID, doc.GrandTotal); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&model.SalesInvoice{}).Where("id = ? AND company_id = ?", id, companyID).
+			Updates(map[string]any{"status": status, "updated_at": time.Now(), "updated_by": actorID}).Error; err != nil {
+			return fmt.Errorf("set sales invoice status %s: %w", id, err)
+		}
+		if doc.Kind == model.SalesInvoiceKindDownPayment && doc.LinkedInvoiceID != nil {
+			return syncSalesInvoiceBalance(tx, companyID, *doc.LinkedInvoiceID)
+		}
+		return nil
+	})
 }
 
 func (r *SalesInvoiceRepository) MitraExists(companyID, mitraID string) (bool, error) {
@@ -550,10 +622,10 @@ func (r *SalesInvoiceRepository) Summary(companyID string) (*domain.Summary, err
 	}
 	out := &domain.Summary{}
 	var err error
-	if out.Outstanding, err = figure(owed(), "grand_total - paid_amount"); err != nil {
+	if out.Outstanding, err = figure(owed(), model.SalesOutstandingSQL); err != nil {
 		return nil, fmt.Errorf("summary outstanding: %w", err)
 	}
-	if out.Overdue, err = figure(owed().Where("due_date IS NOT NULL AND due_date < ?", today), "grand_total - paid_amount"); err != nil {
+	if out.Overdue, err = figure(owed().Where("due_date IS NOT NULL AND due_date < ?", today), model.SalesOutstandingSQL); err != nil {
 		return nil, fmt.Errorf("summary overdue: %w", err)
 	}
 	if out.ThisMonth, err = figure(base().Where("status = ? AND date >= ?", model.SalesInvoiceStatusConfirmed, monthStart), "grand_total"); err != nil {

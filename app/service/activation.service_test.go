@@ -155,3 +155,19 @@ func TestActivationLimits_TransactionCountIncludesOrders(t *testing.T) {
 		t.Fatalf("want the 20 cap to include sales/purchase orders, got %v", err)
 	}
 }
+
+// Regression: a company that already meets every requirement (profile + 3 partners + 1 invoice) but
+// whose stored status was never flipped (the last step was completed without creating a partner or
+// invoice) must get the full-tier cap, not stay locked at the initial 5 transactions/month.
+func TestActivationLimits_StaleInitialStatusIsReevaluated(t *testing.T) {
+	companies := &fakeActivationCompanies{company: completeCompany()} // status "" (never flipped)
+	invoices := &fakeActivationCounts{salesInvoices: 1, salesThisMonth: 5}
+	svc := newActivationTestSvc(companies, 3, invoices)
+
+	if err := svc.CheckTransactionLimit("c1"); err != nil {
+		t.Fatalf("a company meeting every requirement must not stay capped at 5: %v", err)
+	}
+	if companies.company.ActivationStatus != domain.StatusActivated {
+		t.Fatalf("status should have flipped to activated, got %q", companies.company.ActivationStatus)
+	}
+}

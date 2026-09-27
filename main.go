@@ -45,6 +45,10 @@ func main() {
 		log.Printf("⚠️  Tax rename backfill warning: %v", err)
 	}
 
+	if err := repository.BackfillAppliedDownPaymentsOnce(database.DB); err != nil {
+		log.Printf("⚠️  Applied down-payment backfill warning: %v", err)
+	}
+
 	if err := repository.RemovePICBackfilledContacts(database.DB); err != nil {
 		log.Printf("⚠️  Contact person cleanup warning: %v", err)
 	}

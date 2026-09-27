@@ -11,7 +11,8 @@ import (
 // document that used the contact keeps working; documents also store a snapshot of the contact's
 // details (see the contact_* columns on sales/purchase orders and invoices).
 //
-// The partner's own "Contact Name (PIC)" is a company field and is NOT a contact person.
+// The partner's PIC (name/email/phone) is copied into ONE contact person when the partner is created
+// (is_pic = true); later PIC edits update that same row, never add another.
 //
 // A partial unique index (ensurePartialIndexes) refuses a duplicate active contact under a partner
 // (same name + email + phone).
@@ -23,6 +24,8 @@ type ContactPerson struct {
 	Position  string `gorm:"type:varchar(150)"          json:"position,omitempty"`
 	Phone     string `gorm:"type:varchar(50)"           json:"phone,omitempty"`
 	Email     string `gorm:"type:varchar(150)"          json:"email,omitempty"`
+	// IsPIC marks the contact generated from the partner's PIC details.
+	IsPIC bool `gorm:"column:is_pic;not null;default:false" json:"is_pic"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime"   json:"created_at"`
 	CreatedBy string         `gorm:"type:varchar(64)" json:"created_by,omitempty"`

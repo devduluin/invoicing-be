@@ -38,6 +38,8 @@ type CreateDTO struct {
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
 	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
+	// PaymentTerm — the chosen Terms of Payment (it drives the due date on the client); "" = none.
+	PaymentTerm string `json:"payment_term" validate:"omitempty,oneof=cod net_7 net_14 net_30 net_45 net_60 custom"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
@@ -71,6 +73,8 @@ type UpdateDTO struct {
 	Notes           string  `json:"notes"          validate:"omitempty"`
 	Terms           string  `json:"terms"          validate:"omitempty"`
 	Template        string  `json:"template"       validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
+	// PaymentTerm — the chosen Terms of Payment (it drives the due date on the client); "" = none.
+	PaymentTerm string `json:"payment_term" validate:"omitempty,oneof=cod net_7 net_14 net_30 net_45 net_60 custom"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 

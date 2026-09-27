@@ -79,7 +79,7 @@ func (e *ErrLimitReached) Error() string {
 	if e.Activated {
 		return fmt.Sprintf("You've reached your Free plan's limit of %d %s.", e.Limit, label)
 	}
-	return fmt.Sprintf("You've reached the Free plan's limit of %d %s. Complete your workspace setup (3 partners + 1 invoice) to unlock a higher limit.", e.Limit, label)
+	return fmt.Sprintf("You've reached the Free plan's limit of %d %s. Complete your workspace setup (company profile, 3 partners + 1 invoice) to unlock a higher limit.", e.Limit, label)
 }
 
 // ErrCompanyNotFound — the company row could not be found (should not happen for an authenticated,

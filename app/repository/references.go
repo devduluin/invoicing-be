@@ -182,6 +182,39 @@ func checkUnitUnused(db *gorm.DB, companyID, name string) error {
 
 // checkInvoiceHasNoPayments guards a sales invoice against being reverted to draft
 // or deleted while money is applied to it (payments / receipt allocations).
+// checkSalesOrderUnused guards a sales order against deletion while a down payment, invoice, or
+// delivery note still points at it — deleting it out from under them would silently disable the
+// "can't exceed the order total" cap those documents rely on (their query for the order's total
+// would just find no row and skip the check instead of failing closed).
+func checkSalesOrderUnused(db *gorm.DB, companyID, id string) error {
+	total, summary, err := countRefs(db, []refQuery{
+		directRefs("sales_invoices", "sales_order_id", "invoice(s)/down payment(s)", companyID, id),
+		directRefs("delivery_notes", "sales_order_id", "delivery note(s)", companyID, id),
+	})
+	if err != nil {
+		return err
+	}
+	if total > 0 {
+		return inUse("sales order", summary)
+	}
+	return nil
+}
+
+// checkPurchaseOrderUnused is checkSalesOrderUnused's purchase-side twin.
+func checkPurchaseOrderUnused(db *gorm.DB, companyID, id string) error {
+	total, summary, err := countRefs(db, []refQuery{
+		directRefs("purchase_invoices", "purchase_order_id", "purchase invoice(s)", companyID, id),
+		directRefs("goods_receipts", "purchase_order_id", "goods receipt(s)", companyID, id),
+	})
+	if err != nil {
+		return err
+	}
+	if total > 0 {
+		return inUse("purchase order", summary)
+	}
+	return nil
+}
+
 func checkInvoiceHasNoPayments(db *gorm.DB, companyID, invoiceID string) error {
 	total, summary, err := countRefs(db, []refQuery{
 		directRefs("sales_payments", "sales_invoice_id", "payment(s)", companyID, invoiceID),

@@ -254,6 +254,9 @@ func (r *SalesOrderRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
+	if err := checkSalesOrderUnused(r.db, companyID, id); err != nil {
+		return err
+	}
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.SalesOrder{}).Error; err != nil {
 		return fmt.Errorf("delete sales order %s: %w", id, err)
 	}

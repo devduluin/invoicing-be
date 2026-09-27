@@ -50,18 +50,12 @@ func applySalesInvoicePayment(tx *gorm.DB, companyID, invoiceID string, amount f
 	if invoice.Status != model.SalesInvoiceStatusConfirmed {
 		return &ErrInvoiceNotConfirmed{}
 	}
-	remaining := round2(invoice.GrandTotal - invoice.PaidAmount)
-	if amount > remaining {
+	remaining, _ := model.SalesBalance(invoice.GrandTotal, invoice.AppliedDPAmount, invoice.PaidAmount)
+	if amount > remaining+0.005 {
 		return &ErrInvoiceExceedsBalance{Remaining: remaining}
 	}
 	paidAmount := round2(invoice.PaidAmount + amount)
-	status := model.SalesInvoicePaymentUnpaid
-	switch {
-	case paidAmount >= invoice.GrandTotal:
-		status = model.SalesInvoicePaymentPaid
-	case paidAmount > 0:
-		status = model.SalesInvoicePaymentPartiallyPaid
-	}
+	_, status := model.SalesBalance(invoice.GrandTotal, invoice.AppliedDPAmount, paidAmount)
 	return tx.Model(&invoice).Updates(map[string]interface{}{
 		"paid_amount":    paidAmount,
 		"payment_status": status,
@@ -83,35 +77,60 @@ func reverseSalesInvoicePayment(tx *gorm.DB, companyID, invoiceID string, amount
 	if paidAmount < 0 {
 		paidAmount = 0
 	}
-	status := model.SalesInvoicePaymentUnpaid
-	switch {
-	case paidAmount >= invoice.GrandTotal && invoice.GrandTotal > 0:
-		status = model.SalesInvoicePaymentPaid
-	case paidAmount > 0:
-		status = model.SalesInvoicePaymentPartiallyPaid
-	}
+	_, status := model.SalesBalance(invoice.GrandTotal, invoice.AppliedDPAmount, paidAmount)
 	return tx.Unscoped().Model(&model.SalesInvoice{}).Where("id = ?", invoice.ID).Updates(map[string]interface{}{
 		"paid_amount":    paidAmount,
 		"payment_status": status,
 	}).Error
 }
 
-// refreshSalesInvoicePaymentStatus re-derives payment_status from the recorded paid_amount and the
-// CURRENT grand_total. Called after an invoice is edited (its total can change while payments stay).
-// Run inside the update transaction, after grand_total was written.
-func refreshSalesInvoicePaymentStatus(tx *gorm.DB, companyID, invoiceID string) error {
+// syncSalesInvoiceBalance is the single place an invoice's derived balance is rebuilt: it locks the
+// invoice, re-sums the CONFIRMED, non-deleted down payments linked to it (a draft or cancelled DP
+// never counts, a deleted one drops out) into applied_dp_amount, and re-derives payment_status from
+// Total - Applied DP - Paid. Call it inside the transaction after anything that can change the total,
+// a linked DP, or that DP's status. Idempotent, so it can never double count.
+func syncSalesInvoiceBalance(tx *gorm.DB, companyID, invoiceID string) error {
 	var invoice model.SalesInvoice
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ? AND company_id = ?", invoiceID, companyID).
 		First(&invoice).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // deleted invoice: nothing to keep in sync
+		}
 		return fmt.Errorf("lock invoice %s: %w", invoiceID, err)
 	}
-	status := model.SalesInvoicePaymentUnpaid
-	switch {
-	case invoice.PaidAmount >= invoice.GrandTotal && invoice.GrandTotal > 0:
-		status = model.SalesInvoicePaymentPaid
-	case invoice.PaidAmount > 0:
-		status = model.SalesInvoicePaymentPartiallyPaid
+	var applied float64
+	if err := tx.Model(&model.SalesInvoice{}).
+		Where("company_id = ? AND kind = ? AND status = ? AND linked_invoice_id = ?",
+			companyID, model.SalesInvoiceKindDownPayment, model.SalesInvoiceStatusConfirmed, invoiceID).
+		Select("COALESCE(SUM(grand_total), 0)").Scan(&applied).Error; err != nil {
+		return fmt.Errorf("sum down payments of %s: %w", invoiceID, err)
 	}
-	return tx.Model(&model.SalesInvoice{}).Where("id = ?", invoice.ID).Update("payment_status", status).Error
+	applied = round2(applied)
+	_, status := model.SalesBalance(invoice.GrandTotal, applied, invoice.PaidAmount)
+	return tx.Model(&model.SalesInvoice{}).Where("id = ?", invoice.ID).Updates(map[string]interface{}{
+		"applied_dp_amount": applied,
+		"payment_status":    status,
+	}).Error
+}
+
+// outstandingExcludingDP — what the invoice still owes if the given down payment were NOT applied.
+// A DP may only be confirmed/created for at most this much.
+func outstandingExcludingDP(tx *gorm.DB, companyID, invoiceID, dpID string) (float64, error) {
+	var invoice model.SalesInvoice
+	if err := tx.Where("id = ? AND company_id = ?", invoiceID, companyID).First(&invoice).Error; err != nil {
+		return 0, err
+	}
+	var others float64
+	q := tx.Model(&model.SalesInvoice{}).
+		Where("company_id = ? AND kind = ? AND status = ? AND linked_invoice_id = ?",
+			companyID, model.SalesInvoiceKindDownPayment, model.SalesInvoiceStatusConfirmed, invoiceID)
+	if dpID != "" {
+		q = q.Where("id <> ?", dpID)
+	}
+	if err := q.Select("COALESCE(SUM(grand_total), 0)").Scan(&others).Error; err != nil {
+		return 0, err
+	}
+	out, _ := model.SalesBalance(invoice.GrandTotal, round2(others), invoice.PaidAmount)
+	return out, nil
 }

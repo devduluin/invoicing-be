@@ -30,13 +30,8 @@ func (r *SalesPaymentRepository) Create(dto *domain.CreateDTO, actorID string) (
 		return nil, &domain.ErrValidation{Message: "invalid date (format YYYY-MM-DD)"}
 	}
 
-	invoice, err := r.InvoiceForPayment(dto.CompanyID, dto.SalesInvoiceID)
-	if err != nil {
+	if _, err := r.InvoiceForPayment(dto.CompanyID, dto.SalesInvoiceID); err != nil {
 		return nil, err
-	}
-	remaining := round2(invoice.GrandTotal - invoice.PaidAmount)
-	if dto.Amount > remaining {
-		return nil, &domain.ErrExceedsBalance{Message: fmt.Sprintf("amount exceeds the remaining balance (%.2f)", remaining)}
 	}
 
 	number := strings.TrimSpace(dto.Number)
@@ -52,6 +47,7 @@ func (r *SalesPaymentRepository) Create(dto *domain.CreateDTO, actorID string) (
 		}
 	}
 
+	now := time.Now()
 	payment := &model.SalesPayment{
 		ID:             uuid.NewString(),
 		CompanyID:      dto.CompanyID,
@@ -64,11 +60,33 @@ func (r *SalesPaymentRepository) Create(dto *domain.CreateDTO, actorID string) (
 		BankAccountID:  trimPtr(dto.BankAccountID),
 		RefNo:          strings.TrimSpace(dto.RefNo),
 		Notes:          strings.TrimSpace(dto.Notes),
-		CreatedBy:      actorID,
-		UpdatedBy:      actorID,
+		// Recording a payment is one step: it is applied to the invoice right here, in the same
+		// transaction, so there is no pending state that could be applied twice or forgotten.
+		Status:     model.SalesPaymentStatusVerified,
+		VerifiedBy: actorID,
+		VerifiedAt: &now,
+		CreatedBy:  actorID,
+		UpdatedBy:  actorID,
 	}
-	if err := r.db.Create(payment).Error; err != nil {
-		return nil, fmt.Errorf("create sales payment: %w", err)
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if err := applySalesInvoicePayment(tx, dto.CompanyID, dto.SalesInvoiceID, dto.Amount); err != nil {
+			var notConfirmed *ErrInvoiceNotConfirmed
+			if errors.As(err, &notConfirmed) {
+				return &domain.ErrValidation{Message: notConfirmed.Error()}
+			}
+			var exceeds *ErrInvoiceExceedsBalance
+			if errors.As(err, &exceeds) {
+				return &domain.ErrExceedsBalance{Message: exceeds.Error()}
+			}
+			return err
+		}
+		if err := tx.Create(payment).Error; err != nil {
+			return fmt.Errorf("create sales payment: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return r.FindByID(dto.CompanyID, payment.ID)
 }

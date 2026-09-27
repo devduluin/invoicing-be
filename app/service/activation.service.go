@@ -177,6 +177,18 @@ func (s *ActivationService) limitsFor(companyID string) (domain.Limits, error) {
 	if c == nil {
 		return domain.Limits{}, &domain.ErrCompanyNotFound{}
 	}
+	if c.ActivationStatus != domain.StatusActivated {
+		// The stored status only flips when Progress() runs, and that used to happen only right after a
+		// partner/invoice was created or when Overview loaded. Finishing the LAST step any other way (e.g.
+		// completing the company profile after the partners and invoice already existed) left a company
+		// that met every requirement stuck on the initial 5-transactions cap. Evaluate it here, so the
+		// limit always reflects the checklist as it stands now.
+		p, err := s.Progress(companyID)
+		if err != nil {
+			return domain.Limits{}, err
+		}
+		return p.Limits, nil
+	}
 	return domain.LimitsFor(c.ActivationStatus), nil
 }
 

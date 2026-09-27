@@ -59,11 +59,30 @@ func (r *MitraRepository) Create(dto *domain.CreateMitraDTO, actorID string) (*m
 		if err := tx.Create(mitra).Error; err != nil {
 			return fmt.Errorf("create mitra: %w", err)
 		}
-		if len(dto.ContactPersons) == 0 {
-			return nil
+		// The PIC becomes the partner's first contact person, automatically.
+		pn, pe, pp := picName(dto.ContactName, dto.Name), strings.TrimSpace(dto.Email), strings.TrimSpace(dto.Phone)
+		if err := createPICContact(tx, dto.CompanyID, mitra.ID, actorID, pn, pe, pp); err != nil {
+			return err
 		}
-		// creating a partner already needs invoice-mitra-create; the contacts need the contact permission
-		return syncContacts(tx, dto.CompanyID, mitra.ID, actorID, dto.ContactPersons, contactdomain.Perms{Create: dto.ContactPerms.Create})
+		// A contact the user also typed by hand that equals the PIC is the same person: skip it.
+		extra := make([]contactdomain.SyncInput, 0, len(dto.ContactPersons))
+		for _, c := range dto.ContactPersons {
+			if strings.EqualFold(strings.TrimSpace(c.Name), pn) && strings.EqualFold(strings.TrimSpace(c.Email), pe) && strings.TrimSpace(c.Phone) == pp {
+				continue
+			}
+			extra = append(extra, c)
+		}
+		// Creating a partner already needs invoice-mitra-create; extra contacts need the contact permission.
+		// (Created one by one, not through syncContacts, which would treat the PIC row as "missing".)
+		for _, c := range extra {
+			if !dto.ContactPerms.Create {
+				return &contactdomain.ErrForbidden{Action: "add"}
+			}
+			if _, err := createContact(tx, dto.CompanyID, mitra.ID, actorID, contactdomain.Input{Name: c.Name, Position: c.Position, Phone: c.Phone, Email: c.Email}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, mapContactErr(err)
@@ -73,12 +92,13 @@ func (r *MitraRepository) Create(dto *domain.CreateMitraDTO, actorID string) (*m
 
 // Update — 1 SELECT (existence) + 1 UPDATE + 1 SELECT (re-read).
 func (r *MitraRepository) Update(companyID, id string, dto *domain.UpdateMitraDTO, actorID string) (*model.Mitra, error) {
-	if _, err := r.FindByID(companyID, id); err != nil {
+	before, err := r.FindByID(companyID, id)
+	if err != nil {
 		return nil, err
 	}
 
 	updates := mitraUpdateMap(dto, actorID)
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+	err = r.db.Transaction(func(tx *gorm.DB) error {
 		if dto.ContactPersons != nil {
 			if err := lockMitra(tx, companyID, id); err != nil {
 				return err
@@ -90,9 +110,12 @@ func (r *MitraRepository) Update(companyID, id string, dto *domain.UpdateMitraDT
 			return fmt.Errorf("update mitra %s: %w", id, err)
 		}
 		if dto.ContactPersons != nil {
-			return syncContacts(tx, companyID, id, actorID, dto.ContactPersons, dto.ContactPerms)
+			if err := syncContacts(tx, companyID, id, actorID, dto.ContactPersons, dto.ContactPerms); err != nil {
+				return err
+			}
 		}
-		return nil
+		// Changed PIC details flow into the PIC contact (after the list sync, so it wins over stale rows).
+		return syncPICContact(tx, companyID, id, actorID, before, dto.ContactName, dto.Email, dto.Phone)
 	})
 	if err != nil {
 		return nil, mapContactErr(err)
