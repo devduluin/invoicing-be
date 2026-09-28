@@ -6,15 +6,19 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	domain "duluin_invoice/app/domain/salesorder"
+	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
 	"duluin_invoice/utils"
 )
 
-type SalesOrderController struct{ svc domain.IService }
+type SalesOrderController struct {
+	svc domain.IService
+	sso *sso.Client
+}
 
-func NewSalesOrderController(svc domain.IService) *SalesOrderController {
-	return &SalesOrderController{svc: svc}
+func NewSalesOrderController(svc domain.IService, ssoClient *sso.Client) *SalesOrderController {
+	return &SalesOrderController{svc: svc, sso: ssoClient}
 }
 
 func (ctrl *SalesOrderController) List(c *fiber.Ctx) error {
@@ -59,6 +63,12 @@ func (ctrl *SalesOrderController) Create(c *fiber.Ctx) error {
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "sales-order", "", &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", "", &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Create(middlewares.GetCompanyID(c), middlewares.GetUserID(c), &dto)
 	if err != nil {
 		return salesOrderErr(c, err)
@@ -73,6 +83,17 @@ func (ctrl *SalesOrderController) Update(c *fiber.Ctx) error {
 	}
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
+	}
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
+	existingAttachment, existingSignature := "", ""
+	if before != nil {
+		existingAttachment, existingSignature = before.AttachmentData, before.SignatureData
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "sales-order", existingAttachment, &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", existingSignature, &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
 	}
 	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
 	if err != nil {

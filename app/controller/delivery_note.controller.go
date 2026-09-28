@@ -6,15 +6,19 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	domain "duluin_invoice/app/domain/deliverynote"
+	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
 	"duluin_invoice/utils"
 )
 
-type DeliveryNoteController struct{ svc domain.IService }
+type DeliveryNoteController struct {
+	svc domain.IService
+	sso *sso.Client
+}
 
-func NewDeliveryNoteController(svc domain.IService) *DeliveryNoteController {
-	return &DeliveryNoteController{svc: svc}
+func NewDeliveryNoteController(svc domain.IService, ssoClient *sso.Client) *DeliveryNoteController {
+	return &DeliveryNoteController{svc: svc, sso: ssoClient}
 }
 
 func (ctrl *DeliveryNoteController) List(c *fiber.Ctx) error {
@@ -51,6 +55,9 @@ func (ctrl *DeliveryNoteController) Create(c *fiber.Ctx) error {
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "delivery-note", "", &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Create(middlewares.GetCompanyID(c), middlewares.GetUserID(c), &dto)
 	if err != nil {
 		return deliveryNoteErr(c, err)
@@ -65,6 +72,14 @@ func (ctrl *DeliveryNoteController) Update(c *fiber.Ctx) error {
 	}
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
+	}
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
+	existingAttachment := ""
+	if before != nil {
+		existingAttachment = before.AttachmentData
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "delivery-note", existingAttachment, &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
 	}
 	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
 	if err != nil {
