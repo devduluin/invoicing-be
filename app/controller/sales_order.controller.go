@@ -109,6 +109,20 @@ func (ctrl *SalesOrderController) Delete(c *fiber.Ctx) error {
 	return utils.Deleted(c, "Sales order deleted")
 }
 
+// POST /api/v1/sales-orders/bulk-delete — {"ids": [...]}, up to 100 at once. Each id goes through
+// the exact same guarded Delete as the single-row endpoint; a row that's still referenced fails on
+// its own without blocking the rest of the batch.
+func (ctrl *SalesOrderController) BulkDelete(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	companyID := middlewares.GetCompanyID(c)
+	return runBulkDelete(c, ids, func(id string) error {
+		return ctrl.svc.Delete(companyID, id)
+	})
+}
+
 func (ctrl *SalesOrderController) Confirm(c *fiber.Ctx) error {
 	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
 	if err != nil {

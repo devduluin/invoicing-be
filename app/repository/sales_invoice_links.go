@@ -17,8 +17,11 @@ const amountEpsilon = 0.005
 //
 //   - Down payment linked to an invoice: at most that invoice's outstanding, not counting this DP
 //     itself (a draft DP does not reduce anything, so it can't be counted against itself).
-//   - Down payment from a sales order (no invoice yet): all its DPs together at most the order total.
-//   - Invoice from a sales order: all its non-cancelled invoices together at most the order total.
+//   - A sales order's own total is NOT a cap on what can be created from it: a confirmed order can
+//     be invoiced (or drawn on for down payments) any number of times for any amount, same as the
+//     reference product (Paper.id) — the order is a record of what was agreed, not a running
+//     invoicing budget. Only the "does this order actually exist" check remains, so a document can
+//     never reference a deleted/foreign order.
 func checkSalesInvoiceLinks(tx *gorm.DB, companyID, selfID string, kind model.SalesInvoiceKind, salesOrderID, linkedInvoiceID *string, total float64) error {
 	if kind == model.SalesInvoiceKindDownPayment && linkedInvoiceID != nil {
 		var target model.SalesInvoice
@@ -44,26 +47,12 @@ func checkSalesInvoiceLinks(tx *gorm.DB, companyID, selfID string, kind model.Sa
 	if salesOrderID == nil {
 		return nil
 	}
-	var order struct{ GrandTotal float64 }
-	res := tx.Table("sales_orders").Select("grand_total").
-		Where("id = ? AND company_id = ? AND deleted_at IS NULL", *salesOrderID, companyID).Scan(&order)
-	if res.Error != nil {
-		return fmt.Errorf("find sales order: %w", res.Error)
+	var exists int64
+	if err := tx.Table("sales_orders").Where("id = ? AND company_id = ? AND deleted_at IS NULL", *salesOrderID, companyID).Count(&exists).Error; err != nil {
+		return fmt.Errorf("find sales order: %w", err)
 	}
-	if res.RowsAffected == 0 {
+	if exists == 0 {
 		return &domain.ErrValidation{Message: "the sales order was not found"}
-	}
-	q := tx.Model(&model.SalesInvoice{}).
-		Where("company_id = ? AND sales_order_id = ? AND kind = ? AND status <> ?", companyID, *salesOrderID, kind, model.SalesInvoiceStatusCancelled)
-	if selfID != "" {
-		q = q.Where("id <> ?", selfID)
-	}
-	var used float64
-	if err := q.Select("COALESCE(SUM(grand_total), 0)").Scan(&used).Error; err != nil {
-		return fmt.Errorf("sum documents of sales order: %w", err)
-	}
-	if order.GrandTotal > 0 && round2(used)+total > order.GrandTotal+amountEpsilon {
-		return &domain.ErrValidation{Message: fmt.Sprintf("amount (%.2f) exceeds what is still available on the sales order (%.2f)", total, order.GrandTotal-round2(used))}
 	}
 	return nil
 }

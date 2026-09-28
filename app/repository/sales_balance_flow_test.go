@@ -285,17 +285,18 @@ func TestFlow_Validation(t *testing.T) {
 	}
 	f.expect(inv.ID, 6*m, 0, 4*m)
 
+	// A sales order's own total is NOT a cap (matches the reference product, Paper.id): any number
+	// of invoices/down payments for any amount can be made from one confirmed order.
 	so := f.salesOrder(10 * m)
-	if _, err := f.doc("invoice", 10*m+1, &so, nil); err == nil {
-		t.Fatal("invoice above the order must be rejected")
-	}
-	first := f.mustDoc("invoice", 6*m, &so, nil)
-	if _, err := f.doc("invoice", 5*m, &so, nil); err == nil {
-		t.Fatal("second invoice must fit into what is left of the order")
-	}
-	_ = first
-	if _, err := f.doc("down_payment", 10*m+1, ptr(so), nil); err == nil {
-		t.Fatal("DP above the order must be rejected")
+	f.mustDoc("invoice", 10*m+1, &so, nil)
+	f.mustDoc("invoice", 6*m, &so, nil)
+	f.mustDoc("invoice", 5*m, &so, nil)
+	f.mustDoc("down_payment", 10*m+1, ptr(so), nil)
+
+	// A reference to a nonexistent order is still rejected.
+	fake := "00000000-0000-0000-0000-000000000000"
+	if _, err := f.doc("invoice", 1*m, &fake, nil); err == nil {
+		t.Fatal("an invoice referencing a sales order that doesn't exist must be rejected")
 	}
 }
 
@@ -373,9 +374,10 @@ func TestFlow_InvoiceMadeFromDownPayment(t *testing.T) {
 	f.expect(inv.ID, 3*m, 0, 7*m)
 }
 
-// Gap coverage: deleting a Sales Order that still has an invoice/DP/delivery note must be refused —
-// otherwise those documents' "can't exceed the order total" cap silently turns off (the cap query
-// finds no order row and used to skip the check instead of failing).
+// A sales order stays a reference document even for documents already created from it: it can't be
+// deleted while an invoice/DP/delivery note still points at it (referential integrity — those
+// documents must never end up pointing at a sales order that no longer exists), independent of any
+// amount cap (there is none).
 func TestFlow_SalesOrderDeleteGuardedWhileReferenced(t *testing.T) {
 	f := newFlow(t)
 	so := f.salesOrder(10 * m)
@@ -386,13 +388,15 @@ func TestFlow_SalesOrderDeleteGuardedWhileReferenced(t *testing.T) {
 		t.Fatal("deleting a sales order with a live invoice must be refused")
 	}
 
-	// once refused, the order still exists and its cap still applies
-	if _, err := f.doc("invoice", 5*m, &so, nil); err == nil {
-		t.Fatal("order total 10jt already has 6jt invoiced; a second 5jt invoice must be rejected")
+	// once refused, the order still exists, and a second invoice from it is fine (no amount cap).
+	if _, err := f.doc("invoice", 5*m, &so, nil); err != nil {
+		t.Fatalf("a second invoice from the same order should be allowed: %v", err)
 	}
 }
 
-func TestFlow_PurchaseInvoiceCappedByPurchaseOrder(t *testing.T) {
+// A purchase order's total is likewise not a cap — any number of bills for any amount can be made
+// from one confirmed order — but it still can't be deleted while a bill references it.
+func TestFlow_PurchaseOrderNotAmountCappedButDeleteGuarded(t *testing.T) {
 	f := newFlow(t)
 	po := &model.PurchaseOrder{ID: uuid.NewString(), CompanyID: f.company, MitraID: f.mitra, Number: "PO/" + uuid.NewString()[:6], GrandTotal: 10 * m, Status: model.PurchaseOrderStatusConfirmed}
 	if err := f.db.Create(po).Error; err != nil {
@@ -403,17 +407,12 @@ func TestFlow_PurchaseInvoiceCappedByPurchaseOrder(t *testing.T) {
 		calc := &utils.LinesCalc{Lines: []utils.LineResult{{ProductName: "x", Quantity: 1, UnitPrice: total, LineSubtotal: total, LineTotal: total}}, Subtotal: total, GrandTotal: total}
 		return repo.Create(&purchaseinvoice.CreateDTO{CompanyID: f.company, PurchaseOrderID: &po.ID, MitraID: f.mitra, Date: "2026-09-24"}, calc, "u")
 	}
-	if _, err := mk(10*m + 1); err == nil {
-		t.Fatal("a bill above the PO total must be rejected")
+	if _, err := mk(10*m + 1); err != nil {
+		t.Fatalf("a bill above the PO total is allowed: %v", err)
 	}
-	first, err := mk(6 * m)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := mk(6 * m); err != nil {
+		t.Fatalf("further bills from the same PO are allowed: %v", err)
 	}
-	if _, err := mk(5 * m); err == nil {
-		t.Fatal("6jt + 5jt exceeds the 10jt PO; the second bill must be rejected")
-	}
-	_ = first
 
 	if err := (&PurchaseOrderRepository{db: f.db}).Delete(f.company, po.ID); err == nil {
 		t.Fatal("deleting a purchase order with a live bill must be refused")

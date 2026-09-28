@@ -20,6 +20,7 @@ func SalesInvoiceRoutes(router fiber.Router, ctrl *controller.SalesInvoiceContro
 	g.Post("/", middlewares.RequirePermission("invoice-sales-invoice-create"), ctrl.Create)
 	g.Put("/:id", middlewares.RequirePermission("invoice-sales-invoice-update"), ctrl.Update)
 	g.Delete("/:id", middlewares.RequirePermission("invoice-sales-invoice-delete"), ctrl.Delete)
+	g.Post("/bulk-delete", middlewares.RequirePermission("invoice-sales-invoice-delete"), ctrl.BulkDelete)
 	g.Put("/:id/template", middlewares.RequirePermission("invoice-sales-invoice-update"), ctrl.SetTemplate)
 	g.Post("/:id/confirm", middlewares.RequirePermission("invoice-sales-invoice-update"), ctrl.Confirm)
 	g.Post("/:id/cancel", middlewares.RequirePermission("invoice-sales-invoice-update"), ctrl.Cancel)

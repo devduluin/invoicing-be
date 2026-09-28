@@ -155,6 +155,26 @@ func (ctrl *SalesInvoiceController) Delete(c *fiber.Ctx) error {
 	return utils.Deleted(c, "Invoice deleted")
 }
 
+// POST /api/v1/sales-invoices/bulk-delete — {"ids": [...]}, up to 100 at once. Same guarded Delete
+// and audit entry per id as the single-row endpoint, just one HTTP round trip for the whole batch.
+func (ctrl *SalesInvoiceController) BulkDelete(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	companyID := middlewares.GetCompanyID(c)
+	return runBulkDelete(c, ids, func(id string) error {
+		before, _ := ctrl.svc.Get(companyID, id)
+		if err := ctrl.svc.Delete(companyID, id); err != nil {
+			return err
+		}
+		if before != nil {
+			ctrl.logInvoice(c, audit.ActionDeleted, before, fmt.Sprintf("Deleted %s", before.Number), nil)
+		}
+		return nil
+	})
+}
+
 func (ctrl *SalesInvoiceController) Confirm(c *fiber.Ctx) error {
 	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
 	if err != nil {
