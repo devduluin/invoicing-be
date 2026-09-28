@@ -2,19 +2,24 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/salespayment"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
 	"duluin_invoice/utils"
 )
 
-type SalesPaymentController struct{ svc domain.IService }
+type SalesPaymentController struct {
+	svc domain.IService
+	doc documentAudit
+}
 
-func NewSalesPaymentController(svc domain.IService) *SalesPaymentController {
-	return &SalesPaymentController{svc: svc}
+func NewSalesPaymentController(svc domain.IService, auditSvc audit.ILogger) *SalesPaymentController {
+	return &SalesPaymentController{svc: svc, doc: documentAudit{log: auditSvc, module: audit.ModuleSalesInvoice, entityType: "sales_payment"}}
 }
 
 func (ctrl *SalesPaymentController) List(c *fiber.Ctx) error {
@@ -56,6 +61,9 @@ func (ctrl *SalesPaymentController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return salesPaymentErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionPayment, row.ID, row.Number, fmt.Sprintf("Recorded payment %s", row.Number), map[string]audit.Change{
+		"amount": {Before: nil, After: row.Amount},
+	})
 	return utils.Created(c, row, "Payment recorded")
 }
 
@@ -64,6 +72,7 @@ func (ctrl *SalesPaymentController) Verify(c *fiber.Ctx) error {
 	if err != nil {
 		return salesPaymentErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Verified payment", "pending", string(row.Status))
 	return utils.Ok(c, row, "Payment verified")
 }
 

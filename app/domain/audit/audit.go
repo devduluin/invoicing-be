@@ -49,6 +49,7 @@ const (
 	ModulePurchaseInvoice = "purchase_invoice"
 	ModulePurchaseReceipt = "purchase_receipt"
 	ModuleGoodsReceipt    = "goods_receipt"
+	ModulePartner         = "partner"
 	ModuleSettings        = "settings"
 	ModuleOther           = "other"
 )

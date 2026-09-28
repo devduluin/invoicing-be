@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/deliverynote"
 	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
@@ -13,12 +14,13 @@ import (
 )
 
 type DeliveryNoteController struct {
+	doc documentAudit
 	svc domain.IService
 	sso *sso.Client
 }
 
-func NewDeliveryNoteController(svc domain.IService, ssoClient *sso.Client) *DeliveryNoteController {
-	return &DeliveryNoteController{svc: svc, sso: ssoClient}
+func NewDeliveryNoteController(svc domain.IService, ssoClient *sso.Client, auditSvc audit.ILogger) *DeliveryNoteController {
+	return &DeliveryNoteController{svc: svc, sso: ssoClient, doc: documentAudit{log: auditSvc, module: audit.ModuleDeliveryNote, entityType: "delivery_note"}}
 }
 
 func (ctrl *DeliveryNoteController) List(c *fiber.Ctx) error {
@@ -62,6 +64,7 @@ func (ctrl *DeliveryNoteController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return deliveryNoteErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionCreated, row.ID, row.Number, "Created "+row.Number, nil)
 	return utils.Created(c, row, "Delivery note added")
 }
 
@@ -85,12 +88,17 @@ func (ctrl *DeliveryNoteController) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return deliveryNoteErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionUpdated, row.ID, row.Number, "Updated "+row.Number, docDiff(before, row))
 	return utils.Ok(c, row, "Delivery note updated")
 }
 
 func (ctrl *DeliveryNoteController) Delete(c *fiber.Ctx) error {
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
 		return deliveryNoteErr(c, err)
+	}
+	if before != nil {
+		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
 	return utils.Deleted(c, "Delivery note deleted")
 }

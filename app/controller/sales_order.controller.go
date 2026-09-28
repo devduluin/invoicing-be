@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/salesorder"
 	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
@@ -13,12 +14,13 @@ import (
 )
 
 type SalesOrderController struct {
+	doc documentAudit
 	svc domain.IService
 	sso *sso.Client
 }
 
-func NewSalesOrderController(svc domain.IService, ssoClient *sso.Client) *SalesOrderController {
-	return &SalesOrderController{svc: svc, sso: ssoClient}
+func NewSalesOrderController(svc domain.IService, ssoClient *sso.Client, auditSvc audit.ILogger) *SalesOrderController {
+	return &SalesOrderController{svc: svc, sso: ssoClient, doc: documentAudit{log: auditSvc, module: audit.ModuleSalesOrder, entityType: "sales_order"}}
 }
 
 func (ctrl *SalesOrderController) List(c *fiber.Ctx) error {
@@ -73,6 +75,7 @@ func (ctrl *SalesOrderController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return salesOrderErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionCreated, row.ID, row.Number, "Created "+row.Number, nil)
 	return utils.Created(c, row, "Sales order added")
 }
 
@@ -99,12 +102,17 @@ func (ctrl *SalesOrderController) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return salesOrderErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionUpdated, row.ID, row.Number, "Updated "+row.Number, docDiff(before, row))
 	return utils.Ok(c, row, "Sales order updated")
 }
 
 func (ctrl *SalesOrderController) Delete(c *fiber.Ctx) error {
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
 		return salesOrderErr(c, err)
+	}
+	if before != nil {
+		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
 	return utils.Deleted(c, "Sales order deleted")
 }
@@ -119,7 +127,14 @@ func (ctrl *SalesOrderController) BulkDelete(c *fiber.Ctx) error {
 	}
 	companyID := middlewares.GetCompanyID(c)
 	return runBulkDelete(c, ids, func(id string) error {
-		return ctrl.svc.Delete(companyID, id)
+		before, _ := ctrl.svc.Get(companyID, id)
+		if err := ctrl.svc.Delete(companyID, id); err != nil {
+			return err
+		}
+		if before != nil {
+			ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
+		}
+		return nil
 	})
 }
 
@@ -128,6 +143,7 @@ func (ctrl *SalesOrderController) Confirm(c *fiber.Ctx) error {
 	if err != nil {
 		return salesOrderErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
 	return utils.Ok(c, row, "Sales order confirmed")
 }
 
@@ -136,6 +152,7 @@ func (ctrl *SalesOrderController) BackToDraft(c *fiber.Ctx) error {
 	if err != nil {
 		return salesOrderErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Moved back to draft:", "confirmed", string(row.Status))
 	return utils.Ok(c, row, "Sales order moved back to draft")
 }
 
@@ -144,6 +161,7 @@ func (ctrl *SalesOrderController) Cancel(c *fiber.Ctx) error {
 	if err != nil {
 		return salesOrderErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionCancelled, row.ID, row.Number, "Cancelled", "", string(row.Status))
 	return utils.Ok(c, row, "Sales order cancelled")
 }
 

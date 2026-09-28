@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	contactdomain "duluin_invoice/app/domain/contactperson"
 	domain "duluin_invoice/app/domain/mitra"
 	"duluin_invoice/app/validation"
@@ -14,10 +15,11 @@ import (
 
 type MitraController struct {
 	svc domain.IMitraService
+	doc documentAudit
 }
 
-func NewMitraController(svc domain.IMitraService) *MitraController {
-	return &MitraController{svc: svc}
+func NewMitraController(svc domain.IMitraService, auditSvc audit.ILogger) *MitraController {
+	return &MitraController{svc: svc, doc: documentAudit{log: auditSvc, module: audit.ModulePartner, entityType: "partner"}}
 }
 
 func (ctrl *MitraController) Create(c *fiber.Ctx) error {
@@ -38,6 +40,7 @@ func (ctrl *MitraController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return handleMitraError(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionCreated, mitra.ID, mitra.Name, "Created partner "+mitra.Name, nil)
 	return utils.Created(c, mitra, "Partner created")
 }
 
@@ -80,18 +83,24 @@ func (ctrl *MitraController) Update(c *fiber.Ctx) error {
 
 	dto.ContactPerms = contactPerms(c)
 
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	mitra, err := ctrl.svc.Update(
 		middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto,
 	)
 	if err != nil {
 		return handleMitraError(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionUpdated, mitra.ID, mitra.Name, "Updated partner "+mitra.Name, docDiff(before, mitra))
 	return utils.Ok(c, mitra, "Partner updated")
 }
 
 func (ctrl *MitraController) Delete(c *fiber.Ctx) error {
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
 		return handleMitraError(c, err)
+	}
+	if before != nil {
+		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Name, "Deleted partner "+before.Name, nil)
 	}
 	return utils.Deleted(c, "Partner deleted")
 }

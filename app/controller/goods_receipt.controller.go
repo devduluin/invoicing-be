@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/goodsreceipt"
 	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
@@ -13,12 +14,13 @@ import (
 )
 
 type GoodsReceiptController struct {
+	doc documentAudit
 	svc domain.IService
 	sso *sso.Client
 }
 
-func NewGoodsReceiptController(svc domain.IService, ssoClient *sso.Client) *GoodsReceiptController {
-	return &GoodsReceiptController{svc: svc, sso: ssoClient}
+func NewGoodsReceiptController(svc domain.IService, ssoClient *sso.Client, auditSvc audit.ILogger) *GoodsReceiptController {
+	return &GoodsReceiptController{svc: svc, sso: ssoClient, doc: documentAudit{log: auditSvc, module: audit.ModuleGoodsReceipt, entityType: "goods_receipt"}}
 }
 
 func (ctrl *GoodsReceiptController) List(c *fiber.Ctx) error {
@@ -61,6 +63,7 @@ func (ctrl *GoodsReceiptController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return goodsReceiptErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionCreated, row.ID, row.Number, "Created "+row.Number, nil)
 	return utils.Created(c, row, "Goods receipt added")
 }
 
@@ -84,12 +87,17 @@ func (ctrl *GoodsReceiptController) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return goodsReceiptErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionUpdated, row.ID, row.Number, "Updated "+row.Number, docDiff(before, row))
 	return utils.Ok(c, row, "Goods receipt updated")
 }
 
 func (ctrl *GoodsReceiptController) Delete(c *fiber.Ctx) error {
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
 		return goodsReceiptErr(c, err)
+	}
+	if before != nil {
+		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
 	return utils.Deleted(c, "Goods receipt deleted")
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/purchaseorder"
 	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
@@ -13,12 +14,13 @@ import (
 )
 
 type PurchaseOrderController struct {
+	doc documentAudit
 	svc domain.IService
 	sso *sso.Client
 }
 
-func NewPurchaseOrderController(svc domain.IService, ssoClient *sso.Client) *PurchaseOrderController {
-	return &PurchaseOrderController{svc: svc, sso: ssoClient}
+func NewPurchaseOrderController(svc domain.IService, ssoClient *sso.Client, auditSvc audit.ILogger) *PurchaseOrderController {
+	return &PurchaseOrderController{svc: svc, sso: ssoClient, doc: documentAudit{log: auditSvc, module: audit.ModulePurchaseOrder, entityType: "purchase_order"}}
 }
 
 func (ctrl *PurchaseOrderController) List(c *fiber.Ctx) error {
@@ -73,6 +75,7 @@ func (ctrl *PurchaseOrderController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseOrderErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionCreated, row.ID, row.Number, "Created "+row.Number, nil)
 	return utils.Created(c, row, "Purchase order added")
 }
 
@@ -99,12 +102,17 @@ func (ctrl *PurchaseOrderController) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseOrderErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionUpdated, row.ID, row.Number, "Updated "+row.Number, docDiff(before, row))
 	return utils.Ok(c, row, "Purchase order updated")
 }
 
 func (ctrl *PurchaseOrderController) Delete(c *fiber.Ctx) error {
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
 		return purchaseOrderErr(c, err)
+	}
+	if before != nil {
+		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
 	return utils.Deleted(c, "Purchase order deleted")
 }
@@ -114,6 +122,7 @@ func (ctrl *PurchaseOrderController) Confirm(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseOrderErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
 	return utils.Ok(c, row, "Purchase order confirmed")
 }
 
@@ -122,6 +131,7 @@ func (ctrl *PurchaseOrderController) BackToDraft(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseOrderErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Moved back to draft:", "confirmed", string(row.Status))
 	return utils.Ok(c, row, "Purchase order moved back to draft")
 }
 
@@ -130,6 +140,7 @@ func (ctrl *PurchaseOrderController) Cancel(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseOrderErr(c, err)
 	}
+	ctrl.doc.statusChange(c, audit.ActionCancelled, row.ID, row.Number, "Cancelled", "", string(row.Status))
 	return utils.Ok(c, row, "Purchase order cancelled")
 }
 

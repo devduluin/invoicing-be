@@ -210,6 +210,9 @@ func (ctrl *SalesInvoiceController) BackToDraft(c *fiber.Ctx) error {
 	if err != nil {
 		return salesInvoiceErr(c, err)
 	}
+	ctrl.logInvoice(c, audit.ActionStatusChanged, row, fmt.Sprintf("Moved %s back to draft", row.Number), map[string]audit.Change{
+		"status": {Before: string(model.SalesInvoiceStatusConfirmed), After: string(row.Status)},
+	})
 	return utils.Ok(c, row, "Invoice moved back to draft")
 }
 

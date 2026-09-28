@@ -5,16 +5,20 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/salesreceipt"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
 	"duluin_invoice/utils"
 )
 
-type SalesReceiptController struct{ svc domain.IService }
+type SalesReceiptController struct {
+	svc domain.IService
+	doc documentAudit
+}
 
-func NewSalesReceiptController(svc domain.IService) *SalesReceiptController {
-	return &SalesReceiptController{svc: svc}
+func NewSalesReceiptController(svc domain.IService, auditSvc audit.ILogger) *SalesReceiptController {
+	return &SalesReceiptController{svc: svc, doc: documentAudit{log: auditSvc, module: audit.ModuleSalesReceipt, entityType: "sales_receipt"}}
 }
 
 func (ctrl *SalesReceiptController) List(c *fiber.Ctx) error {
@@ -63,6 +67,7 @@ func (ctrl *SalesReceiptController) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return salesReceiptErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionCreated, row.ID, row.Number, "Created "+row.Number, nil)
 	return utils.Created(c, row, "Receipt added")
 }
 
@@ -74,16 +79,22 @@ func (ctrl *SalesReceiptController) Update(c *fiber.Ctx) error {
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
 	if err != nil {
 		return salesReceiptErr(c, err)
 	}
+	ctrl.doc.record(c, audit.ActionUpdated, row.ID, row.Number, "Updated "+row.Number, docDiff(before, row))
 	return utils.Ok(c, row, "Receipt updated")
 }
 
 func (ctrl *SalesReceiptController) Delete(c *fiber.Ctx) error {
+	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
 		return salesReceiptErr(c, err)
+	}
+	if before != nil {
+		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
 	return utils.Deleted(c, "Receipt deleted")
 }
