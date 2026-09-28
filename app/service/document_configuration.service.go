@@ -101,6 +101,9 @@ func (s *DocumentConfigurationService) Save(companyID, actorID, docType string, 
 	if img := cfg.Signature.Image; img != "" && (!strings.HasPrefix(img, "data:image/") || len(img) > maxImageLen) {
 		return nil, &domain.ErrValidation{Message: "signature image must be an image under 600 KB"}
 	}
+	if err := validateStyle(cfg); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
