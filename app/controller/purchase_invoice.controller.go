@@ -124,7 +124,9 @@ func (ctrl *PurchaseInvoiceController) Confirm(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseInvoiceErr(c, err)
 	}
-	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
+	if !confirmsJustCreated(c, row.CreatedAt, row.CreatedBy) {
+		ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
+	}
 	return utils.Ok(c, row, "Invoice confirmed")
 }
 

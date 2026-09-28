@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"duluin_invoice/app/controller"
+	audit "duluin_invoice/app/domain/audit"
 	"duluin_invoice/app/notification"
 	"duluin_invoice/app/repository"
 	"duluin_invoice/app/service"
@@ -34,7 +35,8 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	onboardingRepo := repository.NewOnboardingRepository(db)
 	membershipRepo := repository.NewMembershipRepository(db)
 	mitraRepo := repository.NewMitraRepository(db)
-	contactPersonCtrl := controller.NewContactPersonController(service.NewContactPersonService(repository.NewContactPersonRepository(db)))
+	contactPersonSvc := service.NewContactPersonService(repository.NewContactPersonRepository(db))
+	contactPersonCtrl := controller.NewContactPersonController(contactPersonSvc)
 	bankAccountRepo := repository.NewBankAccountRepository(db)
 	accountRepo := repository.NewAccountRepository(db)
 	taxRepo := repository.NewTaxRepository(db)
@@ -97,7 +99,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 
 	// ── controllers ──
 	meCtrl := controller.NewMeController(membershipSvc)
-	onboardingCtrl := controller.NewOnboardingController(onboardingSvc)
+	onboardingCtrl := controller.NewOnboardingController(onboardingSvc, auditSvc)
 	companyCtrl := controller.NewCompanyController(membershipSvc, onboardingRepo, companySvc, auditSvc)
 	memberCtrl := controller.NewMemberController(membershipSvc, auditSvc)
 	auditCtrl := controller.NewAuditController(auditSvc)
@@ -141,6 +143,45 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	RoleReadRoutes(rbac, roleCtrl)
 
 	business := rbac.Group("", middlewares.RequireCompletedOnboarding())
+
+	// ── audit trail for the resources whose controllers don't record their own actions ──
+	// (documents, partners and sign-in are recorded in their controllers; everything else here.)
+	// Registered BEFORE the routes so it wraps them: only requests that succeed are recorded.
+	auditWrites := func(prefix string, spec controller.AuditSpec) {
+		business.Use(prefix, controller.AuditWrites(auditSvc, spec))
+	}
+	endsWith := func(suffix string) func(method, path string) bool {
+		return func(_, path string) bool { return strings.HasSuffix(strings.TrimRight(path, "/"), suffix) }
+	}
+	auditWrites("/accounts", controller.AuditSpec{Module: audit.ModuleAccounting, Entity: "account", Label: "account", Lookup: controller.LookupBy(accountSvc.Get)})
+	auditWrites("/journal-books", controller.AuditSpec{Module: audit.ModuleAccounting, Entity: "journal_book", Label: "journal book", Lookup: controller.LookupBy(journalBookSvc.Get)})
+	auditWrites("/journal-entries", controller.AuditSpec{Module: audit.ModuleAccounting, Entity: "journal_entry", Label: "journal entry", Lookup: controller.LookupBy(journalSvc.Get)})
+	auditWrites("/bank-accounts", controller.AuditSpec{Module: audit.ModuleMasterData, Entity: "bank_account", Label: "bank account", Lookup: controller.LookupBy(bankAccountSvc.Get)})
+	auditWrites("/taxes", controller.AuditSpec{Module: audit.ModuleMasterData, Entity: "tax", Label: "tax", Lookup: controller.LookupBy(taxSvc.Get)})
+	auditWrites("/units", controller.AuditSpec{Module: audit.ModuleMasterData, Entity: "unit", Label: "unit", Lookup: controller.LookupBy(unitSvc.Get)})
+	auditWrites("/document-templates", controller.AuditSpec{Module: audit.ModuleSettings, Entity: "document_template", Label: "default template of"})
+	auditWrites("/roles", controller.AuditSpec{Module: audit.ModuleRoleManagement, Entity: "role", Label: "role", Lookup: controller.RoleAuditLookup(roleSvc)})
+	auditWrites("/mitra", controller.AuditSpec{
+		Module: audit.ModulePartner, Entity: "contact_person", Label: "contact person",
+		Match:  func(_, path string) bool { return strings.Contains(path, "/contact-persons") },
+		Lookup: controller.ContactAuditLookup(contactPersonSvc),
+	})
+	// Per-document template choice (the documents' controllers record everything else themselves).
+	auditWrites("/sales-orders", controller.AuditSpec{Module: audit.ModuleSalesOrder, Entity: "sales_order", Label: "sales order", Match: endsWith("/template"), Lookup: controller.LookupBy(salesOrderSvc.Get)})
+	auditWrites("/sales-invoices", controller.AuditSpec{Module: audit.ModuleSalesInvoice, Entity: "sales_invoice", Label: "sales invoice", Match: endsWith("/template"), Lookup: controller.LookupBy(salesInvoiceSvc.Get)})
+	auditWrites("/purchase-orders", controller.AuditSpec{Module: audit.ModulePurchaseOrder, Entity: "purchase_order", Label: "purchase order", Match: endsWith("/template"), Lookup: controller.LookupBy(purchaseOrderSvc.Get)})
+	auditWrites("/purchase-invoices", controller.AuditSpec{Module: audit.ModulePurchaseInvoice, Entity: "purchase_invoice", Label: "purchase invoice", Match: endsWith("/template"), Lookup: controller.LookupBy(purchaseInvoiceSvc.Get)})
+	// Team: sync-assignments, status changes, invite-multi and accepting an invitation are recorded by
+	// the members controller itself; the rest (single invite, role, profile, remove, resend) here.
+	auditWrites("/members", controller.AuditSpec{
+		Module: audit.ModuleUserManagement, Entity: "member", Label: "user",
+		Match: func(method, path string) bool {
+			p := strings.TrimRight(path, "/")
+			return method == "DELETE" || strings.HasSuffix(p, "/resend") || strings.HasSuffix(p, "/invite") ||
+				(method == "PATCH" && !strings.HasSuffix(p, "/status"))
+		},
+		Lookup: controller.MemberAuditLookup(membershipSvc),
+	})
 	// contact-summary must be registered before MitraRoutes' "/:id"
 	ContactPersonRoutes(business.Group("/mitra"), contactPersonCtrl)
 	MitraRoutes(business.Group("/mitra"), mitraCtrl)

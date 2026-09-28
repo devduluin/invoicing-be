@@ -143,7 +143,9 @@ func (ctrl *SalesOrderController) Confirm(c *fiber.Ctx) error {
 	if err != nil {
 		return salesOrderErr(c, err)
 	}
-	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
+	if !confirmsJustCreated(c, row.CreatedAt, row.CreatedBy) {
+		ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
+	}
 	return utils.Ok(c, row, "Sales order confirmed")
 }
 

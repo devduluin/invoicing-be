@@ -180,9 +180,13 @@ func (ctrl *SalesInvoiceController) Confirm(c *fiber.Ctx) error {
 	if err != nil {
 		return salesInvoiceErr(c, err)
 	}
-	ctrl.logInvoice(c, audit.ActionStatusChanged, row, fmt.Sprintf("Confirmed %s", row.Number), map[string]audit.Change{
-		"status": {Before: string(model.SalesInvoiceStatusDraft), After: string(row.Status)},
-	})
+	// "Save & Confirm" is one action to the user: the trail shows the document being created, not a
+	// second, separate confirmation a moment later.
+	if !confirmsJustCreated(c, row.CreatedAt, row.CreatedBy) {
+		ctrl.logInvoice(c, audit.ActionStatusChanged, row, fmt.Sprintf("Confirmed %s", row.Number), map[string]audit.Change{
+			"status": {Before: string(model.SalesInvoiceStatusDraft), After: string(row.Status)},
+		})
+	}
 	return utils.Ok(c, row, "Invoice confirmed")
 }
 

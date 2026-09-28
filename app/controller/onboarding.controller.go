@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	audit "duluin_invoice/app/domain/audit"
 	membership "duluin_invoice/app/domain/membership"
 	domain "duluin_invoice/app/domain/onboarding"
 	"duluin_invoice/app/validation"
@@ -13,11 +14,12 @@ import (
 )
 
 type OnboardingController struct {
-	svc domain.IOnboardingService
+	svc   domain.IOnboardingService
+	audit audit.ILogger
 }
 
-func NewOnboardingController(svc domain.IOnboardingService) *OnboardingController {
-	return &OnboardingController{svc: svc}
+func NewOnboardingController(svc domain.IOnboardingService, auditSvc audit.ILogger) *OnboardingController {
+	return &OnboardingController{svc: svc, audit: auditSvc}
 }
 
 // POST /api/v1/onboarding — the single commit of the wizard draft.
@@ -41,6 +43,20 @@ func (ctrl *OnboardingController) Submit(c *fiber.Ctx) error {
 	result, err := ctrl.svc.Submit(actor, dto)
 	if err != nil {
 		return handleOnboardingError(c, err)
+	}
+	// The request has no active company yet (this call creates it), so the entry is scoped to the
+	// company that was just created.
+	if result != nil && result.Company != nil {
+		actorEntry := auditActor(c)
+		actorEntry.CompanyID = result.Company.ID
+		ctrl.audit.Log(actorEntry, audit.Entry{
+			Action:      audit.ActionCreated,
+			Module:      audit.ModuleCompany,
+			EntityType:  "company",
+			EntityID:    result.Company.ID,
+			EntityName:  result.Company.Name,
+			Description: "Created company " + result.Company.Name,
+		})
 	}
 	return utils.Created(c, result, "Company created")
 }

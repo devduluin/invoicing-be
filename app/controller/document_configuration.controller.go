@@ -60,7 +60,7 @@ func (ctrl *DocumentConfigurationController) Save(c *fiber.Ctx) error {
 
 	changes := map[string]audit.Change{}
 	if before != nil {
-		changes = jsonFieldDiff(string(before.Config), string(item.Config))
+		changes = nestedFieldDiff(before.Config, item.Config)
 	}
 	ctrl.audit.Log(auditActor(c), audit.Entry{
 		Action:      audit.ActionUpdated,

@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -110,4 +111,16 @@ func auditValue(key string, r json.RawMessage) any {
 		return "(changed)"
 	}
 	return rawJSONValue(r)
+}
+
+// justCreatedWindow is how soon after creating a document its confirmation still counts as part of
+// the same "Save & Confirm" action rather than a separate one.
+const justCreatedWindow = 15 * time.Second
+
+// confirmsJustCreated reports whether this confirmation is the second half of the create the same
+// user just did (the form's "Save & Confirm" creates, then confirms). The trail then keeps just the
+// "Created" entry instead of a Created + Confirmed pair for what the user did in one click.
+func confirmsJustCreated(c *fiber.Ctx, createdAt time.Time, createdBy string) bool {
+	actor := auditActor(c)
+	return createdBy != "" && createdBy == actor.UserID && time.Since(createdAt) < justCreatedWindow
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	domain "duluin_invoice/app/domain/audit"
@@ -88,5 +89,22 @@ func TestAuditList_CompanyIsolation(t *testing.T) {
 	}
 	if len(res.Data) != 1 {
 		t.Fatalf("company A must not see company B's activity: got %d rows", len(res.Data))
+	}
+}
+
+// A jsonb column rejects "" — an entry with no field changes (login, delete, create) used to store
+// exactly that, so Postgres refused the row and those actions silently never reached the trail.
+func TestAuditLog_EntryWithoutChangesStoresValidJSON(t *testing.T) {
+	repo := &fakeAuditRepo{}
+	svc := NewAuditService(repo)
+	svc.Log(domain.Actor{CompanyID: "c1", Name: "Tiara"}, domain.Entry{Action: domain.ActionDeleted, Module: domain.ModuleSalesOrder, Description: "Deleted SO/1"})
+	if len(repo.rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(repo.rows))
+	}
+	if repo.rows[0].Changes != "{}" || !json.Valid([]byte(repo.rows[0].Changes)) {
+		t.Fatalf("changes must be valid JSON, got %q", repo.rows[0].Changes)
+	}
+	if v := toAuditView(repo.rows[0]); v.Changes != nil {
+		t.Fatalf("an empty change set must not show as a diff, got %s", v.Changes)
 	}
 }

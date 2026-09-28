@@ -33,7 +33,9 @@ func (s *AuditService) Log(a domain.Actor, e domain.Entry) {
 		return
 	}
 
-	var changesJSON string
+	// The column is jsonb: an empty string is not valid JSON and makes Postgres reject the whole row,
+	// so an entry with no field changes (a login, a delete, a create…) stores an empty object.
+	changesJSON := "{}"
 	if len(e.Changes) > 0 {
 		b, err := json.Marshal(e.Changes)
 		if err != nil {
@@ -116,7 +118,7 @@ func toAuditView(rec *model.AuditLog) domain.View {
 }
 
 func rawOrNil(s string) json.RawMessage {
-	if strings.TrimSpace(s) == "" {
+	if t := strings.TrimSpace(s); t == "" || t == "{}" || t == "null" {
 		return nil
 	}
 	return json.RawMessage(s)

@@ -39,3 +39,21 @@ func TestDocDiff(t *testing.T) {
 		t.Error("a missing 'before' yields no diff")
 	}
 }
+
+func TestNestedFieldDiff(t *testing.T) {
+	before := []byte(`{"language":"id","templateStyles":{"template_4":{"appearance":{"color":"#111111"}}},"hidden":["a"]}`)
+	after := []byte(`{"language":"id","templateStyles":{"template_4":{"appearance":{"color":"#16A34A"},"page":{"orientation":"landscape"}}},"hidden":["a","b"]}`)
+	got := nestedFieldDiff(before, after)
+	if c := got["templateStyles.template_4.appearance.color"]; c.Before != "#111111" || c.After != "#16A34A" {
+		t.Errorf("colour change wrong: %+v", c)
+	}
+	if c := got["templateStyles.template_4.page.orientation"]; c.Before != nil || c.After != "landscape" {
+		t.Errorf("added leaf wrong: %+v", c)
+	}
+	if _, ok := got["language"]; ok {
+		t.Error("unchanged leaf reported")
+	}
+	if _, ok := got["hidden"]; !ok {
+		t.Error("changed list not reported")
+	}
+}
