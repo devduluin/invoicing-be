@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -74,6 +76,13 @@ func newFiberApp() *fiber.App {
 		AppName:   config.AppConfig.AppName,
 		Immutable: true,
 		BodyLimit: 25 * 1024 * 1024,
+		// The standard library's json.Marshal (Fiber's default JSONEncoder) HTML-escapes & < >
+		// inside string values (e.g. a URL with query params comes out as ...&...). Every
+		// consumer that actually parses the JSON (any HTTP client, the frontend's fetch().json())
+		// gets the right character either way, but anyone reading the raw response body directly —
+		// logs, curl, Postman, a copy-pasted invite_url — sees the escaped form and a broken link.
+		// This response is never embedded in HTML, so there's nothing to guard against here.
+		JSONEncoder: marshalJSONWithoutHTMLEscaping,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
 			if e, ok := err.(*fiber.Error); ok {
@@ -82,6 +91,18 @@ func newFiberApp() *fiber.App {
 			return c.Status(code).JSON(fiber.Map{"success": false, "message": err.Error()})
 		},
 	})
+}
+
+func marshalJSONWithoutHTMLEscaping(v interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// json.Encoder.Encode appends a trailing newline that json.Marshal does not; trim it so this
+	// is a drop-in replacement for the encoder Fiber otherwise uses.
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func runServer(app *fiber.App, port string) {

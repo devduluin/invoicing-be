@@ -9,23 +9,24 @@ import (
 	"duluin_invoice/app/model"
 )
 
-// Input is the create / update payload (a full replace on update).
+// Input is the create / update payload (a full replace on update). Email and phone are required —
+// a contact person exists to be reachable, same rule as the partner's own PIC.
 type Input struct {
 	Name     string `json:"name"     validate:"required,max=255"`
 	Position string `json:"position" validate:"omitempty,max=150"`
-	Phone    string `json:"phone"    validate:"omitempty,max=50"`
-	Email    string `json:"email"    validate:"omitempty,email,max=150"`
+	Phone    string `json:"phone"    validate:"required,max=50"`
+	Email    string `json:"email"    validate:"required,email,max=150"`
 }
 
 // SyncInput is one row of the contact list submitted together with a partner. A row with an ID is
 // an existing contact (updated); a row without one is new; existing contacts missing from the list
-// are deleted (soft).
+// are deleted (soft). Email and phone are required, same as Input.
 type SyncInput struct {
 	ID       string `json:"id"       validate:"omitempty,uuid4"`
 	Name     string `json:"name"     validate:"required,max=255"`
 	Position string `json:"position" validate:"omitempty,max=150"`
-	Phone    string `json:"phone"    validate:"omitempty,max=50"`
-	Email    string `json:"email"    validate:"omitempty,email,max=150"`
+	Phone    string `json:"phone"    validate:"required,max=50"`
+	Email    string `json:"email"    validate:"required,email,max=150"`
 }
 
 // Perms — what the caller may do to contacts; a sync that needs more than that is refused as a whole.
