@@ -25,23 +25,32 @@ func IsValidPurchaseReceiptPaymentMethod(v string) bool {
 	}
 }
 
-// PurchaseReceipt ("Purchase Receipt") is a standalone proof-of-payment
-// record — the AP mirror of SalesReceipt — no line items, no draft/confirm
-// lifecycle; it can be edited and soft-deleted. It
-// optionally references the PurchaseInvoice it's a receipt for, but does
-// not update that invoice's paid/outstanding status — there's no
-// partial-payment tracking in this scope.
+// PurchaseReceipt ("Purchase Receipt") is a standalone proof-of-payment record — the AP mirror of
+// SalesReceipt — no draft/confirm lifecycle; it can be edited and soft-deleted (both reverse the
+// allocations on the invoices first). It allocates its payment across one or more purchase
+// invoices via Allocations; each allocation updates that invoice's PaidAmount/PaymentStatus (see
+// PurchaseReceiptRepository.Create / applyPurchaseInvoicePayment).
 type PurchaseReceipt struct {
-	ID                string                       `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID         string                       `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID           string                       `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	PurchaseInvoiceID *string                      `gorm:"type:uuid;index"            json:"purchase_invoice_id,omitempty"`
-	Number            string                       `gorm:"type:varchar(50);not null"  json:"number"`
-	Date              time.Time                    `gorm:"type:date;not null"         json:"date"`
-	Amount            float64                      `gorm:"type:numeric(18,2);not null;default:0" json:"amount"`
-	PaymentMethod     PurchaseReceiptPaymentMethod `gorm:"type:varchar(20);not null;default:'cash'" json:"payment_method"`
-	BankAccountID     *string                      `gorm:"type:uuid;index"            json:"bank_account_id,omitempty"`
-	Notes             string                       `gorm:"type:text"                  json:"notes,omitempty"`
+	ID        string    `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID string    `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID   string    `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	Number    string    `gorm:"type:varchar(50);not null"  json:"number"`
+	Date      time.Time `gorm:"type:date;not null"         json:"date"`
+	// Amount — the receipt's total, computed once at create time as the sum of Allocations'
+	// amounts (materialized for fast list display, same convention as SalesReceipt.Amount).
+	Amount        float64                      `gorm:"type:numeric(18,2);not null;default:0" json:"amount"`
+	PaymentMethod PurchaseReceiptPaymentMethod `gorm:"type:varchar(20);not null;default:'cash'" json:"payment_method"`
+	BankAccountID *string                      `gorm:"type:uuid;index"            json:"bank_account_id,omitempty"`
+	Notes         string                       `gorm:"type:text"                  json:"notes,omitempty"`
+
+	// Optional supporting file, stored as a data: URI (same convention as sales_order.go) until
+	// uploaded to MinIO by the controller.
+	AttachmentData string `gorm:"type:text"         json:"attachment_data,omitempty"`
+	AttachmentName string `gorm:"type:varchar(255)" json:"attachment_name,omitempty"`
+	// Optional signature captured on this receipt, same convention as sales_order.go.
+	SignatureData string `gorm:"type:text" json:"signature_data,omitempty"`
+
+	Allocations []PurchaseReceiptAllocation `gorm:"foreignKey:PurchaseReceiptID" json:"allocations,omitempty"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime"   json:"created_at"`
 	CreatedBy string         `gorm:"type:varchar(64)" json:"created_by,omitempty"`
@@ -55,6 +64,25 @@ func (PurchaseReceipt) TableName() string { return "purchase_receipts" }
 func (r *PurchaseReceipt) BeforeCreate(tx *gorm.DB) error {
 	if r.ID == "" {
 		r.ID = uuid.New().String()
+	}
+	return nil
+}
+
+// PurchaseReceiptAllocation — one row of "Kepada Invoice": how much of this receipt's total goes
+// to which purchase invoice. The AP mirror of SalesReceiptAllocation.
+type PurchaseReceiptAllocation struct {
+	ID                string  `gorm:"type:uuid;primaryKey"     json:"id"`
+	PurchaseReceiptID string  `gorm:"type:uuid;not null;index" json:"purchase_receipt_id"`
+	PurchaseInvoiceID string  `gorm:"type:uuid;not null;index" json:"purchase_invoice_id"`
+	CompanyID         string  `gorm:"type:uuid;not null;index" json:"company_id"`
+	Amount            float64 `gorm:"type:numeric(18,2);not null;default:0" json:"amount"`
+}
+
+func (PurchaseReceiptAllocation) TableName() string { return "purchase_receipt_allocations" }
+
+func (a *PurchaseReceiptAllocation) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == "" {
+		a.ID = uuid.New().String()
 	}
 	return nil
 }

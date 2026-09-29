@@ -7,6 +7,7 @@ import (
 
 	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/purchasereceipt"
+	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
 	"duluin_invoice/utils"
@@ -14,11 +15,12 @@ import (
 
 type PurchaseReceiptController struct {
 	svc domain.IService
+	sso *sso.Client
 	doc documentAudit
 }
 
-func NewPurchaseReceiptController(svc domain.IService, auditSvc audit.ILogger) *PurchaseReceiptController {
-	return &PurchaseReceiptController{svc: svc, doc: documentAudit{log: auditSvc, module: audit.ModulePurchaseReceipt, entityType: "purchase_receipt"}}
+func NewPurchaseReceiptController(svc domain.IService, auditSvc audit.ILogger, ssoClient *sso.Client) *PurchaseReceiptController {
+	return &PurchaseReceiptController{svc: svc, sso: ssoClient, doc: documentAudit{log: auditSvc, module: audit.ModulePurchaseReceipt, entityType: "purchase_receipt"}}
 }
 
 func (ctrl *PurchaseReceiptController) List(c *fiber.Ctx) error {
@@ -63,6 +65,12 @@ func (ctrl *PurchaseReceiptController) Create(c *fiber.Ctx) error {
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "purchase-receipt", "", &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", "", &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Create(middlewares.GetCompanyID(c), middlewares.GetUserID(c), &dto)
 	if err != nil {
 		return purchaseReceiptErr(c, err)
@@ -80,6 +88,16 @@ func (ctrl *PurchaseReceiptController) Update(c *fiber.Ctx) error {
 		return utils.ValidationFailed(c, msgs)
 	}
 	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
+	existingAttachment, existingSignature := "", ""
+	if before != nil {
+		existingAttachment, existingSignature = before.AttachmentData, before.SignatureData
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "purchase-receipt", existingAttachment, &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", existingSignature, &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
 	if err != nil {
 		return purchaseReceiptErr(c, err)

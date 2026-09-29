@@ -116,11 +116,11 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	salesOrderCtrl := controller.NewSalesOrderController(salesOrderSvc, ssoClient, auditSvc)
 	salesInvoiceCtrl := controller.NewSalesInvoiceController(salesInvoiceSvc, auditSvc, ssoClient)
 	documentTemplateCtrl := controller.NewDocumentTemplateController(documentTemplateSvc)
-	salesReceiptCtrl := controller.NewSalesReceiptController(salesReceiptSvc, auditSvc)
+	salesReceiptCtrl := controller.NewSalesReceiptController(salesReceiptSvc, auditSvc, ssoClient)
 	salesPaymentCtrl := controller.NewSalesPaymentController(salesPaymentSvc, auditSvc)
 	purchaseOrderCtrl := controller.NewPurchaseOrderController(purchaseOrderSvc, ssoClient, auditSvc)
 	purchaseInvoiceCtrl := controller.NewPurchaseInvoiceController(purchaseInvoiceSvc, ssoClient, auditSvc)
-	purchaseReceiptCtrl := controller.NewPurchaseReceiptController(purchaseReceiptSvc, auditSvc)
+	purchaseReceiptCtrl := controller.NewPurchaseReceiptController(purchaseReceiptSvc, auditSvc, ssoClient)
 	deliveryNoteCtrl := controller.NewDeliveryNoteController(deliveryNoteSvc, ssoClient, auditSvc)
 	goodsReceiptCtrl := controller.NewGoodsReceiptController(goodsReceiptSvc, ssoClient, auditSvc)
 

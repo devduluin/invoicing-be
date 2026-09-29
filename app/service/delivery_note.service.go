@@ -28,6 +28,10 @@ func (s *DeliveryNoteService) Get(companyID, id string) (*model.DeliveryNote, er
 	return s.repo.FindByID(companyID, id)
 }
 
+func (s *DeliveryNoteService) PreviewNumber(companyID string) (string, error) {
+	return s.repo.PreviewNumber(companyID)
+}
+
 func (s *DeliveryNoteService) List(f *domain.Filter) (*utils.OffsetPaginationResult, error) {
 	return s.repo.FindAll(f)
 }

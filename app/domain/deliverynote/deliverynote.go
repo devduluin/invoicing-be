@@ -31,6 +31,7 @@ type CreateDTO struct {
 	Notes          string  `json:"notes"          validate:"omitempty"`
 
 	// Optional shipping/logistics detail — none required.
+	ShipFrom       string   `json:"ship_from"       validate:"omitempty,max=150"`
 	ShippingMethod string   `json:"shipping_method" validate:"omitempty,max=100"`
 	TrackingNo     string   `json:"tracking_no"     validate:"omitempty,max=100"`
 	VehicleNo      string   `json:"vehicle_no"      validate:"omitempty,max=100"`
@@ -40,6 +41,8 @@ type CreateDTO struct {
 	// Optional supporting file — see app/model/delivery_note.go.
 	AttachmentData string `json:"attachment_data" validate:"omitempty"`
 	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
+	// Optional signature — see app/model/delivery_note.go.
+	SignatureData string `json:"signature_data" validate:"omitempty"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
@@ -69,6 +72,7 @@ type IRepository interface {
 	Update(companyID, id string, dto *UpdateDTO, actorID string) (*model.DeliveryNote, error)
 	Delete(companyID, id string) error
 	MitraExists(companyID, mitraID string) (bool, error)
+	PreviewNumber(companyID string) (string, error)
 }
 
 // IService — Update replaces the whole record; Delete is a soft delete.
@@ -78,6 +82,7 @@ type IService interface {
 	List(f *Filter) (*utils.OffsetPaginationResult, error)
 	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.DeliveryNote, error)
 	Delete(companyID, id string) error
+	PreviewNumber(companyID string) (string, error)
 }
 
 type ErrNotFound struct{ ID string }

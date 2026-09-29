@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	purchaseinvoice "duluin_invoice/app/domain/purchaseinvoice"
+	purchasereceipt "duluin_invoice/app/domain/purchasereceipt"
 	salesinvoice "duluin_invoice/app/domain/salesinvoice"
 	salespayment "duluin_invoice/app/domain/salespayment"
 	salesreceipt "duluin_invoice/app/domain/salesreceipt"
@@ -417,4 +418,206 @@ func TestFlow_PurchaseOrderNotAmountCappedButDeleteGuarded(t *testing.T) {
 	if err := (&PurchaseOrderRepository{db: f.db}).Delete(f.company, po.ID); err == nil {
 		t.Fatal("deleting a purchase order with a live bill must be refused")
 	}
+}
+
+// A paid invoice is guarded: it can't be deleted, cancelled or reverted to draft, and its total
+// can't be edited down below what was already settled.
+func TestFlow_PaidInvoiceIsGuarded(t *testing.T) {
+	f := newFlow(t)
+	inv := f.mustDoc("invoice", 10*m, nil, nil)
+	f.mustConfirm(inv.ID)
+	if _, err := f.receipt(inv.ID, 4*m); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.inv.Delete(f.company, inv.ID); err == nil {
+		t.Fatal("an invoice with a payment applied must not be deletable")
+	}
+	if err := f.setStatus(inv.ID, model.SalesInvoiceStatusCancelled); err == nil {
+		t.Fatal("an invoice with a payment applied must not be cancellable")
+	}
+	if err := f.setStatus(inv.ID, model.SalesInvoiceStatusDraft); err == nil {
+		t.Fatal("an invoice with a payment applied must not go back to draft")
+	}
+
+	calc := func(total float64) *utils.LinesCalc {
+		return &utils.LinesCalc{Lines: []utils.LineResult{{ProductName: "x", Quantity: 1, UnitPrice: total, LineSubtotal: total, LineTotal: total}}, Subtotal: total, GrandTotal: total}
+	}
+	dto := &salesinvoice.UpdateDTO{MitraID: f.mitra, Date: "2026-09-24", DueDate: "2026-10-24"}
+	if _, err := f.inv.Update(f.company, inv.ID, dto, calc(3*m), "u"); err == nil {
+		t.Fatal("the total can't drop below the 4,000,000 already paid")
+	}
+	if _, err := f.inv.Update(f.company, inv.ID, dto, calc(4*m), "u"); err != nil {
+		t.Fatalf("editing down to exactly what is paid is fine: %v", err)
+	}
+	f.expect(inv.ID, 0, 4*m, 0)
+}
+
+// A confirmed Sales Order that already has a confirmed Down Payment / Invoice / Delivery Note
+// referencing it must not be revertable to draft or cancellable — either would strand those child
+// documents pointing at a no-longer-confirmed order (Delete already guards the same way).
+func TestFlow_SalesOrderBackToDraftAndCancelGuardedWhileReferenced(t *testing.T) {
+	f := newFlow(t)
+	so := f.salesOrder(10 * m)
+	dp := f.mustDoc("down_payment", 3*m, &so, nil)
+	f.mustConfirm(dp.ID)
+
+	soRepo := &SalesOrderRepository{db: f.db}
+	if err := soRepo.SetStatus(f.company, so, "u", model.SalesOrderStatusDraft); err == nil {
+		t.Fatal("reverting a referenced sales order to draft must be refused")
+	}
+	if err := soRepo.SetStatus(f.company, so, "u", model.SalesOrderStatusCancelled); err == nil {
+		t.Fatal("cancelling a referenced sales order must be refused")
+	}
+}
+
+// Same guard, the purchase-side twin: a confirmed Purchase Order with a live Purchase Invoice /
+// Goods Receipt against it can't be reverted to draft or cancelled.
+func TestFlow_PurchaseOrderBackToDraftAndCancelGuardedWhileReferenced(t *testing.T) {
+	f := newFlow(t)
+	po := &model.PurchaseOrder{ID: uuid.NewString(), CompanyID: f.company, MitraID: f.mitra, Number: "PO/" + uuid.NewString()[:6], GrandTotal: 10 * m, Status: model.PurchaseOrderStatusConfirmed}
+	if err := f.db.Create(po).Error; err != nil {
+		t.Fatal(err)
+	}
+	calc := &utils.LinesCalc{Lines: []utils.LineResult{{ProductName: "x", Quantity: 1, UnitPrice: 5 * m, LineSubtotal: 5 * m, LineTotal: 5 * m}}, Subtotal: 5 * m, GrandTotal: 5 * m}
+	if _, err := (&PurchaseInvoiceRepository{db: f.db}).Create(&purchaseinvoice.CreateDTO{CompanyID: f.company, PurchaseOrderID: &po.ID, MitraID: f.mitra, Date: "2026-09-24"}, calc, "u"); err != nil {
+		t.Fatal(err)
+	}
+
+	poRepo := &PurchaseOrderRepository{db: f.db}
+	if err := poRepo.SetStatus(f.company, po.ID, "u", model.PurchaseOrderStatusDraft); err == nil {
+		t.Fatal("reverting a referenced purchase order to draft must be refused")
+	}
+	if err := poRepo.SetStatus(f.company, po.ID, "u", model.PurchaseOrderStatusCancelled); err == nil {
+		t.Fatal("cancelling a referenced purchase order must be refused")
+	}
+}
+
+// A Purchase Invoice with a payment (purchase receipt) applied must not be deletable, and its
+// total can't be edited down below what was already paid — mirrors TestFlow_PaidInvoiceIsGuarded.
+func TestFlow_PaidPurchaseInvoiceIsGuarded(t *testing.T) {
+	f := newFlow(t)
+	repo := &PurchaseInvoiceRepository{db: f.db}
+	calc := func(total float64) *utils.LinesCalc {
+		return &utils.LinesCalc{Lines: []utils.LineResult{{ProductName: "x", Quantity: 1, UnitPrice: total, LineSubtotal: total, LineTotal: total}}, Subtotal: total, GrandTotal: total}
+	}
+	inv, err := repo.Create(&purchaseinvoice.CreateDTO{CompanyID: f.company, MitraID: f.mitra, Date: "2026-09-24"}, calc(10*m), "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetStatus(f.company, inv.ID, "u", model.PurchaseInvoiceStatusConfirmed); err != nil {
+		t.Fatal(err)
+	}
+	receipt := &model.PurchaseReceipt{ID: uuid.NewString(), CompanyID: f.company, MitraID: f.mitra, Number: "PR/" + uuid.NewString()[:6], Amount: 4 * m}
+	if err := f.db.Create(receipt).Error; err != nil {
+		t.Fatal(err)
+	}
+	alloc := &model.PurchaseReceiptAllocation{ID: uuid.NewString(), PurchaseReceiptID: receipt.ID, PurchaseInvoiceID: inv.ID, CompanyID: f.company, Amount: 4 * m}
+	if err := f.db.Create(alloc).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Delete(f.company, inv.ID); err == nil {
+		t.Fatal("a purchase invoice with a payment applied must not be deletable")
+	}
+	if err := repo.SetStatus(f.company, inv.ID, "u", model.PurchaseInvoiceStatusCancelled); err == nil {
+		t.Fatal("a purchase invoice with a payment applied must not be cancellable")
+	}
+	if err := repo.SetStatus(f.company, inv.ID, "u", model.PurchaseInvoiceStatusDraft); err == nil {
+		t.Fatal("a purchase invoice with a payment applied must not go back to draft")
+	}
+
+	dto := &purchaseinvoice.UpdateDTO{MitraID: f.mitra, Date: "2026-09-24"}
+	if _, err := repo.Update(f.company, inv.ID, dto, calc(3*m), "u"); err == nil {
+		t.Fatal("the total can't drop below the 4,000,000 already paid")
+	}
+	if _, err := repo.Update(f.company, inv.ID, dto, calc(4*m), "u"); err != nil {
+		t.Fatalf("editing down to exactly what is paid is fine: %v", err)
+	}
+}
+
+// A Purchase Receipt allocates its payment across one or more Purchase Invoices, mirroring Sales
+// Receipt on the AP side: Create applies every allocation, Update reverses the old set and applies
+// the new one, Delete reverses everything.
+func TestFlow_PurchaseReceiptMultipleAllocations(t *testing.T) {
+	f := newFlow(t)
+	piRepo := &PurchaseInvoiceRepository{db: f.db}
+	prRepo := &PurchaseReceiptRepository{db: f.db}
+	calc := func(total float64) *utils.LinesCalc {
+		return &utils.LinesCalc{Lines: []utils.LineResult{{ProductName: "x", Quantity: 1, UnitPrice: total, LineSubtotal: total, LineTotal: total}}, Subtotal: total, GrandTotal: total}
+	}
+	mk := func(total float64) *model.PurchaseInvoice {
+		inv, err := piRepo.Create(&purchaseinvoice.CreateDTO{CompanyID: f.company, MitraID: f.mitra, Date: "2026-09-24"}, calc(total), "u")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := piRepo.SetStatus(f.company, inv.ID, "u", model.PurchaseInvoiceStatusConfirmed); err != nil {
+			t.Fatal(err)
+		}
+		return inv
+	}
+	inv1, inv2, inv3 := mk(10*m), mk(5*m), mk(8*m)
+
+	receipt, err := prRepo.Create(&purchasereceipt.CreateDTO{
+		CompanyID: f.company, MitraID: f.mitra, Date: "2026-09-24", PaymentMethod: "cash",
+		Allocations: []purchasereceipt.AllocationDTO{{PurchaseInvoiceID: inv1.ID, Amount: 4 * m}, {PurchaseInvoiceID: inv2.ID, Amount: 5 * m}},
+	}, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Amount != 9*m {
+		t.Fatalf("receipt total = %v, want 9,000,000", receipt.Amount)
+	}
+	got1, _ := piRepo.FindByID(f.company, inv1.ID)
+	got2, _ := piRepo.FindByID(f.company, inv2.ID)
+	if got1.PaidAmount != 4*m || got2.PaidAmount != 5*m {
+		t.Fatalf("paid amounts after create: inv1=%v inv2=%v", got1.PaidAmount, got2.PaidAmount)
+	}
+
+	// Update: drop inv2, keep inv1 at a different amount, add inv3 — inv2 must be given back in full.
+	if _, err := prRepo.Update(f.company, receipt.ID, &purchasereceipt.UpdateDTO{
+		CompanyID: f.company, MitraID: f.mitra, Date: "2026-09-24", PaymentMethod: "cash",
+		Allocations: []purchasereceipt.AllocationDTO{{PurchaseInvoiceID: inv1.ID, Amount: 6 * m}, {PurchaseInvoiceID: inv3.ID, Amount: 8 * m}},
+	}, "u"); err != nil {
+		t.Fatal(err)
+	}
+	got1, _ = piRepo.FindByID(f.company, inv1.ID)
+	got2, _ = piRepo.FindByID(f.company, inv2.ID)
+	got3, _ := piRepo.FindByID(f.company, inv3.ID)
+	if got1.PaidAmount != 6*m {
+		t.Fatalf("inv1 paid after update = %v, want 6,000,000", got1.PaidAmount)
+	}
+	if got2.PaidAmount != 0 {
+		t.Fatalf("inv2 must be given back in full, got %v", got2.PaidAmount)
+	}
+	if got3.PaidAmount != 8*m || got3.PaymentStatus != model.PurchaseInvoicePaymentPaid {
+		t.Fatalf("inv3 paid after update = %v status=%v, want 8,000,000/paid", got3.PaidAmount, got3.PaymentStatus)
+	}
+
+	// Delete: everything currently allocated must be given back.
+	if err := prRepo.Delete(f.company, receipt.ID); err != nil {
+		t.Fatal(err)
+	}
+	got1, _ = piRepo.FindByID(f.company, inv1.ID)
+	got3, _ = piRepo.FindByID(f.company, inv3.ID)
+	if got1.PaidAmount != 0 || got3.PaidAmount != 0 {
+		t.Fatalf("after delete: inv1=%v inv3=%v, want both 0", got1.PaidAmount, got3.PaidAmount)
+	}
+
+	// A purchase invoice with a live receipt allocation can't be deleted or reverted (mirrors
+	// TestFlow_PaidInvoiceIsGuarded, purchase side).
+	receipt2, err := prRepo.Create(&purchasereceipt.CreateDTO{
+		CompanyID: f.company, MitraID: f.mitra, Date: "2026-09-24", PaymentMethod: "cash",
+		Allocations: []purchasereceipt.AllocationDTO{{PurchaseInvoiceID: inv1.ID, Amount: 2 * m}},
+	}, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := piRepo.Delete(f.company, inv1.ID); err == nil {
+		t.Fatal("a purchase invoice with a live receipt allocation must not be deletable")
+	}
+	if err := piRepo.SetStatus(f.company, inv1.ID, "u", model.PurchaseInvoiceStatusCancelled); err == nil {
+		t.Fatal("a purchase invoice with a live receipt allocation must not be cancellable")
+	}
+	_ = receipt2
 }

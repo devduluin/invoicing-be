@@ -151,6 +151,9 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 	if err := checkPurchaseInvoiceOrder(r.db, companyID, id, trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
 		return nil, err
 	}
+	if existing.PaidAmount > 0 && calc.GrandTotal+0.005 < round2(existing.PaidAmount) {
+		return nil, &domain.ErrValidation{Message: fmt.Sprintf("the total can't be lower than the %.2f already paid", round2(existing.PaidAmount))}
+	}
 
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{
@@ -291,7 +294,12 @@ func (r *PurchaseInvoiceRepository) Delete(companyID, id string) error {
 	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
-	// Soft delete (deleted_at). Payments (purchase receipts) keep their own records.
+	// Money already applied to it (purchase receipts) must be reversed first — deleting the invoice
+	// would leave those receipts pointing at nothing.
+	if err := checkPurchaseInvoiceHasNoPayments(r.db, companyID, id); err != nil {
+		return err
+	}
+	// Soft delete (deleted_at).
 	if err := r.db.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseInvoice{}).Error; err != nil {
 		return fmt.Errorf("delete purchase invoice %s: %w", id, err)
 	}
@@ -490,7 +498,12 @@ func (r *PurchaseInvoiceRepository) PreviewNumber(companyID string) (string, err
 // (purchase receipts) are applied to it. Delete those payments first.
 func checkPurchaseInvoiceHasNoPayments(db *gorm.DB, companyID, invoiceID string) error {
 	total, summary, err := countRefs(db, []refQuery{
-		directRefs("purchase_receipts", "purchase_invoice_id", "payment(s)", companyID, invoiceID),
+		{
+			label: "receipt allocation(s)",
+			sql: `SELECT COUNT(*) FROM purchase_receipt_allocations a JOIN purchase_receipts r ON r.id = a.purchase_receipt_id
+			      WHERE a.purchase_invoice_id = ? AND r.company_id = ? AND r.deleted_at IS NULL`,
+			args: []any{invoiceID, companyID},
+		},
 	})
 	if err != nil {
 		return err

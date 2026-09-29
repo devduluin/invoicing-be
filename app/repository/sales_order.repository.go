@@ -264,6 +264,13 @@ func (r *SalesOrderRepository) Delete(companyID, id string) error {
 }
 
 func (r *SalesOrderRepository) SetStatus(companyID, id, actorID string, status model.SalesOrderStatus) error {
+	// Reverting to draft or cancelling would strand any Down Payment / Invoice / Delivery Note
+	// already created against this order (Delete guards the same way; see checkSalesOrderUnused).
+	if status == model.SalesOrderStatusDraft || status == model.SalesOrderStatusCancelled {
+		if err := checkSalesOrderUnused(r.db, companyID, id); err != nil {
+			return err
+		}
+	}
 	res := r.db.Model(&model.SalesOrder{}).Where("id = ? AND company_id = ?", id, companyID).
 		Updates(map[string]any{"status": status, "updated_at": time.Now(), "updated_by": actorID})
 	if res.Error != nil {

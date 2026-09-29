@@ -58,17 +58,20 @@ func (r *SalesReceiptRepository) Create(dto *domain.CreateDTO, actorID string) (
 		}
 
 		receipt := &model.SalesReceipt{
-			ID:            receiptID,
-			CompanyID:     dto.CompanyID,
-			MitraID:       dto.MitraID,
-			Number:        number,
-			Date:          date,
-			Amount:        total,
-			PaymentMethod: model.SalesReceiptPaymentMethod(dto.PaymentMethod),
-			BankAccountID: trimPtr(dto.BankAccountID),
-			Notes:         utils.SanitizeRichText(dto.Notes),
-			CreatedBy:     actorID,
-			UpdatedBy:     actorID,
+			ID:             receiptID,
+			CompanyID:      dto.CompanyID,
+			MitraID:        dto.MitraID,
+			Number:         number,
+			Date:           date,
+			Amount:         total,
+			PaymentMethod:  model.SalesReceiptPaymentMethod(dto.PaymentMethod),
+			BankAccountID:  trimPtr(dto.BankAccountID),
+			Notes:          utils.SanitizeRichText(dto.Notes),
+			AttachmentData: dto.AttachmentData,
+			AttachmentName: strings.TrimSpace(dto.AttachmentName),
+			SignatureData:  dto.SignatureData,
+			CreatedBy:      actorID,
+			UpdatedBy:      actorID,
 		}
 		if err := tx.Create(receipt).Error; err != nil {
 			return fmt.Errorf("create sales receipt: %w", err)
@@ -307,6 +310,9 @@ func (r *SalesReceiptRepository) Update(companyID, id string, dto *domain.Update
 			"payment_method":  dto.PaymentMethod,
 			"bank_account_id": trimPtr(dto.BankAccountID),
 			"notes":           utils.SanitizeRichText(dto.Notes),
+			"attachment_data": dto.AttachmentData,
+			"attachment_name": strings.TrimSpace(dto.AttachmentName),
+			"signature_data":  dto.SignatureData,
 			"updated_at":      time.Now(),
 			"updated_by":      actorID,
 		}).Error

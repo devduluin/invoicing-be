@@ -28,6 +28,10 @@ func (s *GoodsReceiptService) Get(companyID, id string) (*model.GoodsReceipt, er
 	return s.repo.FindByID(companyID, id)
 }
 
+func (s *GoodsReceiptService) PreviewNumber(companyID string) (string, error) {
+	return s.repo.PreviewNumber(companyID)
+}
+
 func (s *GoodsReceiptService) List(f *domain.Filter) (*utils.OffsetPaginationResult, error) {
 	return s.repo.FindAll(f)
 }

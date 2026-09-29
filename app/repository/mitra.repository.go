@@ -188,7 +188,14 @@ func (r *MitraRepository) mitraFilterQuery(filter *domain.MitraFilter) *gorm.DB 
 		query = query.Where("LOWER(name) LIKE ? OR LOWER(email) LIKE ?", s, s)
 	}
 	if filter.Type != "" {
-		query = query.Where("type = ?", filter.Type)
+		// A partner marked "both" is valid on either side, so a caller asking for "customer" or
+		// "supplier" also gets the "both" ones — only an explicit "both" filter means exactly that.
+		switch filter.Type {
+		case "customer", "supplier":
+			query = query.Where("type IN ?", []string{filter.Type, "both"})
+		default:
+			query = query.Where("type = ?", filter.Type)
+		}
 	}
 	if filter.IsActive != nil {
 		query = query.Where("is_active = ?", utils.BoolInt(*filter.IsActive).ToInt())

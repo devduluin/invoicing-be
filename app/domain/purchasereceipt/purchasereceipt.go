@@ -10,31 +10,39 @@ import (
 	"duluin_invoice/utils"
 )
 
-// CreateDTO — Number is optional; the service auto-generates one
-// (PKW/YYYY/NNNN) when blank. PurchaseInvoiceID is optional traceability
-// only — creating a receipt does not update the invoice's paid/outstanding
-// status (no partial-payment tracking exists here).
-type CreateDTO struct {
-	CompanyID         string  `json:"-"`
-	MitraID           string  `json:"mitra_id"            validate:"required,uuid4"`
-	PurchaseInvoiceID *string `json:"purchase_invoice_id" validate:"omitempty,uuid4"`
-	Number            string  `json:"number"              validate:"omitempty,max=50"`
-	Date              string  `json:"date"                validate:"required"` // YYYY-MM-DD
+// AllocationDTO — one "Kepada Invoice" row: how much of this receipt goes to which purchase
+// invoice. Each allocation updates that invoice's PaidAmount/PaymentStatus.
+type AllocationDTO struct {
+	PurchaseInvoiceID string  `json:"purchase_invoice_id" validate:"required,uuid4"`
 	Amount            float64 `json:"amount"              validate:"gt=0"`
-	PaymentMethod     string  `json:"payment_method"      validate:"required,oneof=cash transfer other"`
-	BankAccountID     *string `json:"bank_account_id"     validate:"omitempty,uuid4"`
-	Notes             string  `json:"notes"               validate:"omitempty"`
+}
+
+// CreateDTO — Number is optional; the service auto-generates one (PKW/YYYY/NNNN) when blank.
+// Amount isn't client-supplied — it's the sum of Allocations, computed by the repository. A
+// receipt must allocate to at least one invoice.
+type CreateDTO struct {
+	CompanyID      string          `json:"-"`
+	MitraID        string          `json:"mitra_id"        validate:"required,uuid4"`
+	Number         string          `json:"number"          validate:"omitempty,max=50"`
+	Date           string          `json:"date"            validate:"required"` // YYYY-MM-DD
+	PaymentMethod  string          `json:"payment_method"  validate:"required,oneof=cash transfer other"`
+	BankAccountID  *string         `json:"bank_account_id" validate:"omitempty,uuid4"`
+	Notes          string          `json:"notes"           validate:"omitempty"`
+	AttachmentData string          `json:"attachment_data" validate:"omitempty"`
+	AttachmentName string          `json:"attachment_name" validate:"omitempty,max=255"`
+	SignatureData  string          `json:"signature_data"  validate:"omitempty"`
+	Allocations    []AllocationDTO `json:"allocations"     validate:"required,min=1,dive"`
 }
 
 // UpdateDTO is the same shape as CreateDTO (full replace); a blank Number keeps the current one.
 type UpdateDTO = CreateDTO
 
-// Filter drives the paginated list query.
+// Filter drives the paginated list query. PurchaseInvoiceID scopes to receipts with an allocation
+// against that invoice — the detail page's payment history.
 type Filter struct {
-	CompanyID string
-	Search    string
-	MitraID   string
-	// PurchaseInvoiceID scopes to the payments applied to one bill.
+	CompanyID         string
+	Search            string
+	MitraID           string
 	PurchaseInvoiceID string
 	Page              int
 	PageSize          int

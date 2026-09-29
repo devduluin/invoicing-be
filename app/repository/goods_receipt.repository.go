@@ -57,6 +57,7 @@ func (r *GoodsReceiptRepository) Create(dto *domain.CreateDTO, actorID string) (
 			Number:          n,
 			Date:            date,
 			Notes:           utils.SanitizeRichText(dto.Notes),
+			ReceivedIn:      strings.TrimSpace(dto.ReceivedIn),
 			ShippingMethod:  strings.TrimSpace(dto.ShippingMethod),
 			TrackingNo:      strings.TrimSpace(dto.TrackingNo),
 			VehicleNo:       strings.TrimSpace(dto.VehicleNo),
@@ -167,6 +168,12 @@ func generateGoodsReceiptNumber(tx *gorm.DB, companyID string, date time.Time) (
 	return fmt.Sprintf("%s%04d", prefix, max+1), nil
 }
 
+// PreviewNumber is what the next auto-generated number would be right now — a preview for
+// the Add page, not a reservation (see generateGoodsReceiptNumber).
+func (r *GoodsReceiptRepository) PreviewNumber(companyID string) (string, error) {
+	return generateGoodsReceiptNumber(r.db, companyID, time.Now())
+}
+
 func buildGoodsReceiptLines(lines []domain.LineDTO, companyID, receiptID string) []model.GoodsReceiptLine {
 	out := make([]model.GoodsReceiptLine, 0, len(lines))
 	for i, l := range lines {
@@ -223,6 +230,7 @@ func (r *GoodsReceiptRepository) Update(companyID, id string, dto *domain.Update
 			"number":            number,
 			"date":              date,
 			"notes":             utils.SanitizeRichText(dto.Notes),
+			"received_in":       strings.TrimSpace(dto.ReceivedIn),
 			"shipping_method":   strings.TrimSpace(dto.ShippingMethod),
 			"tracking_no":       strings.TrimSpace(dto.TrackingNo),
 			"vehicle_no":        strings.TrimSpace(dto.VehicleNo),

@@ -41,6 +41,14 @@ func (ctrl *DeliveryNoteController) List(c *fiber.Ctx) error {
 	return utils.List(c, res, "OK")
 }
 
+func (ctrl *DeliveryNoteController) PreviewNumber(c *fiber.Ctx) error {
+	number, err := ctrl.svc.PreviewNumber(middlewares.GetCompanyID(c))
+	if err != nil {
+		return deliveryNoteErr(c, err)
+	}
+	return utils.Ok(c, fiber.Map{"number": number}, "OK")
+}
+
 func (ctrl *DeliveryNoteController) Get(c *fiber.Ctx) error {
 	row, err := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err != nil {
@@ -60,6 +68,9 @@ func (ctrl *DeliveryNoteController) Create(c *fiber.Ctx) error {
 	if err := uploadDocumentAttachment(c, ctrl.sso, "delivery-note", "", &dto.AttachmentData); err != nil {
 		return attachmentUploadFailed(c, err)
 	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", "", &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Create(middlewares.GetCompanyID(c), middlewares.GetUserID(c), &dto)
 	if err != nil {
 		return deliveryNoteErr(c, err)
@@ -77,11 +88,14 @@ func (ctrl *DeliveryNoteController) Update(c *fiber.Ctx) error {
 		return utils.ValidationFailed(c, msgs)
 	}
 	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
-	existingAttachment := ""
+	existingAttachment, existingSignature := "", ""
 	if before != nil {
-		existingAttachment = before.AttachmentData
+		existingAttachment, existingSignature = before.AttachmentData, before.SignatureData
 	}
 	if err := uploadDocumentAttachment(c, ctrl.sso, "delivery-note", existingAttachment, &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", existingSignature, &dto.SignatureData); err != nil {
 		return attachmentUploadFailed(c, err)
 	}
 	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)

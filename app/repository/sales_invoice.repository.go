@@ -148,6 +148,11 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 	if err != nil {
 		return nil, err
 	}
+	// A paid invoice can be edited, but never down to less than what was already settled — that would
+	// leave a negative balance (money received for an amount the invoice no longer asks for).
+	if settled := round2(existing.PaidAmount + existing.AppliedDPAmount); calc.GrandTotal+0.005 < settled {
+		return nil, &domain.ErrValidation{Message: fmt.Sprintf("the total can't be lower than the %.2f already paid or covered by down payments", settled)}
+	}
 
 	date, err := parseSalesInvoiceDate(dto.Date)
 	if err != nil {
@@ -349,6 +354,11 @@ func (r *SalesInvoiceRepository) Delete(companyID, id string) error {
 	if err != nil {
 		return err
 	}
+	// Money already applied to it (payments / receipt allocations) must be reversed first —
+	// deleting the invoice would leave those receipts pointing at nothing.
+	if err := checkInvoiceHasNoPayments(r.db, companyID, id); err != nil {
+		return err
+	}
 	// Soft delete (deleted_at). Receipts / payments that were applied keep their own records; the
 	// invoice just leaves the active lists, summaries and outstanding figures. A deleted down payment
 	// stops reducing the invoice it was applied to.
@@ -364,9 +374,9 @@ func (r *SalesInvoiceRepository) Delete(companyID, id string) error {
 }
 
 func (r *SalesInvoiceRepository) SetStatus(companyID, id, actorID string, status model.SalesInvoiceStatus) error {
-	// Reverting to draft reopens the invoice for editing/deletion — never while
-	// payments or receipt allocations are applied to it.
-	if status == model.SalesInvoiceStatusDraft {
+	// Reverting to draft reopens the invoice for editing/deletion, and cancelling voids it — neither
+	// while payments or receipt allocations are applied to it (reverse those first).
+	if status == model.SalesInvoiceStatusDraft || status == model.SalesInvoiceStatusCancelled {
 		if err := checkInvoiceHasNoPayments(r.db, companyID, id); err != nil {
 			return err
 		}

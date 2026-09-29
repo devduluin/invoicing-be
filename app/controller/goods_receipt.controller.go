@@ -40,6 +40,14 @@ func (ctrl *GoodsReceiptController) List(c *fiber.Ctx) error {
 	return utils.List(c, res, "OK")
 }
 
+func (ctrl *GoodsReceiptController) PreviewNumber(c *fiber.Ctx) error {
+	number, err := ctrl.svc.PreviewNumber(middlewares.GetCompanyID(c))
+	if err != nil {
+		return goodsReceiptErr(c, err)
+	}
+	return utils.Ok(c, fiber.Map{"number": number}, "OK")
+}
+
 func (ctrl *GoodsReceiptController) Get(c *fiber.Ctx) error {
 	row, err := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
 	if err != nil {

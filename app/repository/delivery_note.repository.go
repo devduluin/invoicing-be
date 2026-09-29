@@ -58,12 +58,14 @@ func (r *DeliveryNoteRepository) Create(dto *domain.CreateDTO, actorID string) (
 			Number:         n,
 			Date:           date,
 			Notes:          utils.SanitizeRichText(dto.Notes),
+			ShipFrom:       strings.TrimSpace(dto.ShipFrom),
 			ShippingMethod: strings.TrimSpace(dto.ShippingMethod),
 			TrackingNo:     strings.TrimSpace(dto.TrackingNo),
 			VehicleNo:      strings.TrimSpace(dto.VehicleNo),
 			DriverName:     strings.TrimSpace(dto.DriverName),
 			TotalWeight:    dto.TotalWeight,
 			AttachmentData: dto.AttachmentData,
+			SignatureData:  dto.SignatureData,
 			AttachmentName: strings.TrimSpace(dto.AttachmentName),
 			CreatedBy:      actorID,
 			UpdatedBy:      actorID,
@@ -171,6 +173,12 @@ func generateDeliveryNoteNumber(tx *gorm.DB, companyID string, date time.Time) (
 	return fmt.Sprintf("%s%04d", prefix, max+1), nil
 }
 
+// PreviewNumber is what the next auto-generated number would be right now — a preview for
+// the Add page, not a reservation (see generateDeliveryNoteNumber).
+func (r *DeliveryNoteRepository) PreviewNumber(companyID string) (string, error) {
+	return generateDeliveryNoteNumber(r.db, companyID, time.Now())
+}
+
 func buildDeliveryNoteLines(lines []domain.LineDTO, companyID, noteID string) []model.DeliveryNoteLine {
 	out := make([]model.DeliveryNoteLine, 0, len(lines))
 	for i, l := range lines {
@@ -228,6 +236,7 @@ func (r *DeliveryNoteRepository) Update(companyID, id string, dto *domain.Update
 			"number":           number,
 			"date":             date,
 			"notes":            utils.SanitizeRichText(dto.Notes),
+			"ship_from":        strings.TrimSpace(dto.ShipFrom),
 			"shipping_method":  strings.TrimSpace(dto.ShippingMethod),
 			"tracking_no":      strings.TrimSpace(dto.TrackingNo),
 			"vehicle_no":       strings.TrimSpace(dto.VehicleNo),
@@ -235,6 +244,7 @@ func (r *DeliveryNoteRepository) Update(companyID, id string, dto *domain.Update
 			"total_weight":     dto.TotalWeight,
 			"attachment_data":  dto.AttachmentData,
 			"attachment_name":  strings.TrimSpace(dto.AttachmentName),
+			"signature_data":   dto.SignatureData,
 			"updated_at":       time.Now(),
 			"updated_by":       actorID,
 		}

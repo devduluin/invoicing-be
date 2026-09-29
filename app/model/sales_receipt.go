@@ -47,6 +47,13 @@ type SalesReceipt struct {
 	BankAccountID *string                   `gorm:"type:uuid;index"            json:"bank_account_id,omitempty"`
 	Notes         string                    `gorm:"type:text"                  json:"notes,omitempty"`
 
+	// Optional supporting file, stored as a data: URI (same convention as sales_order.go) until
+	// uploaded to MinIO by the controller.
+	AttachmentData string `gorm:"type:text"         json:"attachment_data,omitempty"`
+	AttachmentName string `gorm:"type:varchar(255)" json:"attachment_name,omitempty"`
+	// Optional signature captured on this receipt, same convention as sales_order.go.
+	SignatureData string `gorm:"type:text" json:"signature_data,omitempty"`
+
 	Allocations []SalesReceiptAllocation `gorm:"foreignKey:SalesReceiptID" json:"allocations,omitempty"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime"   json:"created_at"`

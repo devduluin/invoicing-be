@@ -28,6 +28,7 @@ type DeliveryNote struct {
 
 	// Optional shipping/logistics detail — each surfaced behind its own
 	// checkbox on the frontend ("More Information"); none are required.
+	ShipFrom       string   `gorm:"type:varchar(150)"    json:"ship_from,omitempty"`
 	ShippingMethod string   `gorm:"type:varchar(100)"    json:"shipping_method,omitempty"`
 	TrackingNo     string   `gorm:"type:varchar(100)"    json:"tracking_no,omitempty"`
 	VehicleNo      string   `gorm:"type:varchar(100)"    json:"vehicle_no,omitempty"`
@@ -39,6 +40,8 @@ type DeliveryNote struct {
 	// queries, only fetched on FindByID.
 	AttachmentData string `gorm:"type:text"         json:"attachment_data,omitempty"`
 	AttachmentName string `gorm:"type:varchar(255)" json:"attachment_name,omitempty"`
+	// Optional signature captured on this delivery note, same convention as sales_order.go.
+	SignatureData string `gorm:"type:text" json:"signature_data,omitempty"`
 
 	Lines []DeliveryNoteLine `gorm:"foreignKey:DeliveryNoteID" json:"lines,omitempty"`
 

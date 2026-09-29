@@ -7,6 +7,7 @@ import (
 
 	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/salesreceipt"
+	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
 	"duluin_invoice/utils"
@@ -14,11 +15,12 @@ import (
 
 type SalesReceiptController struct {
 	svc domain.IService
+	sso *sso.Client
 	doc documentAudit
 }
 
-func NewSalesReceiptController(svc domain.IService, auditSvc audit.ILogger) *SalesReceiptController {
-	return &SalesReceiptController{svc: svc, doc: documentAudit{log: auditSvc, module: audit.ModuleSalesReceipt, entityType: "sales_receipt"}}
+func NewSalesReceiptController(svc domain.IService, auditSvc audit.ILogger, ssoClient *sso.Client) *SalesReceiptController {
+	return &SalesReceiptController{svc: svc, sso: ssoClient, doc: documentAudit{log: auditSvc, module: audit.ModuleSalesReceipt, entityType: "sales_receipt"}}
 }
 
 func (ctrl *SalesReceiptController) List(c *fiber.Ctx) error {
@@ -63,6 +65,12 @@ func (ctrl *SalesReceiptController) Create(c *fiber.Ctx) error {
 	if msgs := validation.Struct(&dto); msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "sales-receipt", "", &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", "", &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Create(middlewares.GetCompanyID(c), middlewares.GetUserID(c), &dto)
 	if err != nil {
 		return salesReceiptErr(c, err)
@@ -80,6 +88,16 @@ func (ctrl *SalesReceiptController) Update(c *fiber.Ctx) error {
 		return utils.ValidationFailed(c, msgs)
 	}
 	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
+	existingAttachment, existingSignature := "", ""
+	if before != nil {
+		existingAttachment, existingSignature = before.AttachmentData, before.SignatureData
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "sales-receipt", existingAttachment, &dto.AttachmentData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
+	if err := uploadDocumentAttachment(c, ctrl.sso, "signature", existingSignature, &dto.SignatureData); err != nil {
+		return attachmentUploadFailed(c, err)
+	}
 	row, err := ctrl.svc.Update(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"), &dto)
 	if err != nil {
 		return salesReceiptErr(c, err)

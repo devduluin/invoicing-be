@@ -264,6 +264,13 @@ func (r *PurchaseOrderRepository) Delete(companyID, id string) error {
 }
 
 func (r *PurchaseOrderRepository) SetStatus(companyID, id, actorID string, status model.PurchaseOrderStatus) error {
+	// Reverting to draft or cancelling would strand any Purchase Invoice / Goods Receipt already
+	// created against this order (Delete guards the same way; see checkPurchaseOrderUnused).
+	if status == model.PurchaseOrderStatusDraft || status == model.PurchaseOrderStatusCancelled {
+		if err := checkPurchaseOrderUnused(r.db, companyID, id); err != nil {
+			return err
+		}
+	}
 	res := r.db.Model(&model.PurchaseOrder{}).Where("id = ? AND company_id = ?", id, companyID).
 		Updates(map[string]any{"status": status, "updated_at": time.Now(), "updated_by": actorID})
 	if res.Error != nil {

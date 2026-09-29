@@ -229,7 +229,7 @@ func checkInvoiceHasNoPayments(db *gorm.DB, companyID, invoiceID string) error {
 		return err
 	}
 	if total > 0 {
-		return &utils.ErrInUse{Message: fmt.Sprintf("This invoice already has %s applied — it can't be reverted or deleted.", summary)}
+		return &utils.ErrInUse{Message: fmt.Sprintf("This invoice already has %s applied — it can't be reverted to draft, cancelled or deleted.", summary)}
 	}
 	return nil
 }

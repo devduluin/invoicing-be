@@ -24,6 +24,7 @@ type GoodsReceipt struct {
 
 	// Optional shipping/logistics detail — each surfaced behind its own
 	// checkbox on the frontend ("More Information"); none are required.
+	ReceivedIn     string   `gorm:"type:varchar(150)"    json:"received_in,omitempty"`
 	ShippingMethod string   `gorm:"type:varchar(100)"    json:"shipping_method,omitempty"`
 	TrackingNo     string   `gorm:"type:varchar(100)"    json:"tracking_no,omitempty"`
 	VehicleNo      string   `gorm:"type:varchar(100)"    json:"vehicle_no,omitempty"`

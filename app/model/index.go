@@ -40,6 +40,7 @@ func AllModels() []interface{} {
 		&PurchaseInvoiceLine{},
 		&PurchaseInvoiceLineTax{},
 		&PurchaseReceipt{},
+		&PurchaseReceiptAllocation{},
 		&DeliveryNote{},
 		&DeliveryNoteLine{},
 		&GoodsReceipt{},

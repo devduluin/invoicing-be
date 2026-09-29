@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,40 +43,64 @@ func (r *PurchaseReceiptRepository) Create(dto *domain.CreateDTO, actorID string
 		}
 	}
 
-	receipt := &model.PurchaseReceipt{
-		ID:                uuid.NewString(),
-		CompanyID:         dto.CompanyID,
-		MitraID:           dto.MitraID,
-		PurchaseInvoiceID: trimPtr(dto.PurchaseInvoiceID),
-		Number:            number,
-		Date:              date,
-		Amount:            dto.Amount,
-		PaymentMethod:     model.PurchaseReceiptPaymentMethod(dto.PaymentMethod),
-		BankAccountID:     trimPtr(dto.BankAccountID),
-		Notes:             utils.SanitizeRichText(dto.Notes),
-		CreatedBy:         actorID,
-		UpdatedBy:         actorID,
+	allocations, err := normalizePurchaseReceiptAllocations(dto.Allocations)
+	if err != nil {
+		return nil, err
 	}
+
+	receiptID := uuid.NewString()
+	var total float64
+
 	err = r.db.Transaction(func(tx *gorm.DB) error {
-		if receipt.PurchaseInvoiceID != nil {
-			if err := applyPurchaseInvoicePayment(tx, dto.CompanyID, *receipt.PurchaseInvoiceID, dto.MitraID, dto.Amount); err != nil {
-				return mapPurchasePaymentErr(err)
-			}
+		var err error
+		if total, err = applyPurchaseReceiptAllocations(tx, dto.CompanyID, dto.MitraID, allocations); err != nil {
+			return err
+		}
+
+		receipt := &model.PurchaseReceipt{
+			ID:             receiptID,
+			CompanyID:      dto.CompanyID,
+			MitraID:        dto.MitraID,
+			Number:         number,
+			Date:           date,
+			Amount:         total,
+			PaymentMethod:  model.PurchaseReceiptPaymentMethod(dto.PaymentMethod),
+			BankAccountID:  trimPtr(dto.BankAccountID),
+			Notes:          utils.SanitizeRichText(dto.Notes),
+			AttachmentData: dto.AttachmentData,
+			AttachmentName: strings.TrimSpace(dto.AttachmentName),
+			SignatureData:  dto.SignatureData,
+			CreatedBy:      actorID,
+			UpdatedBy:      actorID,
 		}
 		if err := tx.Create(receipt).Error; err != nil {
 			return fmt.Errorf("create purchase receipt: %w", err)
+		}
+
+		allocRows := make([]model.PurchaseReceiptAllocation, len(allocations))
+		for i, a := range allocations {
+			allocRows[i] = model.PurchaseReceiptAllocation{
+				ID:                uuid.NewString(),
+				PurchaseReceiptID: receiptID,
+				PurchaseInvoiceID: a.PurchaseInvoiceID,
+				CompanyID:         dto.CompanyID,
+				Amount:            a.Amount,
+			}
+		}
+		if err := tx.Create(&allocRows).Error; err != nil {
+			return fmt.Errorf("create purchase receipt allocations: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return r.FindByID(dto.CompanyID, receipt.ID)
+	return r.FindByID(dto.CompanyID, receiptID)
 }
 
 func (r *PurchaseReceiptRepository) FindByID(companyID, id string) (*model.PurchaseReceipt, error) {
 	var rec model.PurchaseReceipt
-	err := r.db.Where("id = ? AND company_id = ?", id, companyID).First(&rec).Error
+	err := r.db.Preload("Allocations").Where("id = ? AND company_id = ?", id, companyID).First(&rec).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, &domain.ErrNotFound{ID: id}
 	}
@@ -95,7 +120,7 @@ func (r *PurchaseReceiptRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 		q = q.Where("mitra_id = ?", f.MitraID)
 	}
 	if f.PurchaseInvoiceID != "" {
-		q = q.Where("purchase_invoice_id = ?", f.PurchaseInvoiceID)
+		q = q.Where("EXISTS (SELECT 1 FROM purchase_receipt_allocations pra WHERE pra.purchase_receipt_id = purchase_receipts.id AND pra.purchase_invoice_id = ?)", f.PurchaseInvoiceID)
 	}
 
 	sortCol := utils.NormalizeSort(f.Sort, purchaseReceiptListColumns, "date")
@@ -111,6 +136,7 @@ func (r *PurchaseReceiptRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 		Order:                order,
 		Select:               f.Fields,
 		ValidColumns:         purchaseReceiptListColumns,
+		Preloads:             []string{"Allocations"},
 		PreserveAssociations: true,
 	})
 }
@@ -163,7 +189,53 @@ func (r *PurchaseReceiptRepository) PreviewNumber(companyID string) (string, err
 	return generatePurchaseReceiptNumber(r.db, companyID, time.Now())
 }
 
-// Update replaces the receipt's fields. A blank Number keeps the current one.
+// normalizePurchaseReceiptAllocations sorts by invoice ID (a consistent lock order across
+// concurrent receipts touching overlapping invoice sets avoids deadlocks) and rejects a
+// duplicated invoice.
+func normalizePurchaseReceiptAllocations(in []domain.AllocationDTO) ([]domain.AllocationDTO, error) {
+	allocations := append([]domain.AllocationDTO(nil), in...)
+	sort.Slice(allocations, func(i, j int) bool { return allocations[i].PurchaseInvoiceID < allocations[j].PurchaseInvoiceID })
+	seen := make(map[string]bool, len(allocations))
+	for _, a := range allocations {
+		if seen[a.PurchaseInvoiceID] {
+			return nil, &domain.ErrValidation{Message: "the same invoice can't be allocated twice in one receipt"}
+		}
+		seen[a.PurchaseInvoiceID] = true
+	}
+	return allocations, nil
+}
+
+// applyPurchaseReceiptAllocations applies each allocation's amount to its invoice balance (partner
+// match, confirmed status and outstanding-balance checks live in applyPurchaseInvoicePayment).
+// Returns the receipt total.
+func applyPurchaseReceiptAllocations(tx *gorm.DB, companyID, mitraID string, allocations []domain.AllocationDTO) (float64, error) {
+	var total float64
+	for _, a := range allocations {
+		if err := applyPurchaseInvoicePayment(tx, companyID, a.PurchaseInvoiceID, mitraID, a.Amount); err != nil {
+			return 0, mapPurchasePaymentErr(err)
+		}
+		total = round2(total + a.Amount)
+	}
+	return total, nil
+}
+
+// reversePurchaseReceiptAllocations gives every allocation of the receipt back to its invoice
+// (sorted by invoice ID for a consistent lock order).
+func reversePurchaseReceiptAllocations(tx *gorm.DB, companyID, receiptID string) error {
+	var rows []model.PurchaseReceiptAllocation
+	if err := tx.Where("purchase_receipt_id = ?", receiptID).Order("purchase_invoice_id").Find(&rows).Error; err != nil {
+		return fmt.Errorf("load receipt allocations: %w", err)
+	}
+	for _, a := range rows {
+		if err := reversePurchaseInvoicePayment(tx, companyID, a.PurchaseInvoiceID, a.Amount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Update replaces the receipt: the previous allocations are reversed, the new ones validated and
+// applied, all in one transaction. A blank Number keeps the current one.
 func (r *PurchaseReceiptRepository) Update(companyID, id string, dto *domain.UpdateDTO, actorID string) (*model.PurchaseReceipt, error) {
 	existing, err := r.FindByID(companyID, id)
 	if err != nil {
@@ -187,31 +259,44 @@ func (r *PurchaseReceiptRepository) Update(companyID, id string, dto *domain.Upd
 			return nil, &domain.ErrNumberExists{Number: number}
 		}
 	}
+	allocations, err := normalizePurchaseReceiptAllocations(dto.Allocations)
+	if err != nil {
+		return nil, err
+	}
+
 	err = r.db.Transaction(func(tx *gorm.DB) error {
-		// Give the old payment back to its invoice, then apply the new one (same or different
-		// invoice), so the balance always equals the sum of live payments.
-		if existing.PurchaseInvoiceID != nil {
-			if err := reversePurchaseInvoicePayment(tx, companyID, *existing.PurchaseInvoiceID, existing.Amount); err != nil {
-				return err
+		if err := reversePurchaseReceiptAllocations(tx, companyID, id); err != nil {
+			return err
+		}
+		total, err := applyPurchaseReceiptAllocations(tx, companyID, dto.MitraID, allocations)
+		if err != nil {
+			return err
+		}
+		if err := tx.Where("purchase_receipt_id = ?", id).Delete(&model.PurchaseReceiptAllocation{}).Error; err != nil {
+			return fmt.Errorf("clear receipt allocations: %w", err)
+		}
+		rows := make([]model.PurchaseReceiptAllocation, len(allocations))
+		for i, a := range allocations {
+			rows[i] = model.PurchaseReceiptAllocation{
+				ID: uuid.NewString(), PurchaseReceiptID: id, PurchaseInvoiceID: a.PurchaseInvoiceID, CompanyID: companyID, Amount: a.Amount,
 			}
 		}
-		newInvoice := trimPtr(dto.PurchaseInvoiceID)
-		if newInvoice != nil {
-			if err := applyPurchaseInvoicePayment(tx, companyID, *newInvoice, dto.MitraID, dto.Amount); err != nil {
-				return mapPurchasePaymentErr(err)
-			}
+		if err := tx.Create(&rows).Error; err != nil {
+			return fmt.Errorf("create purchase receipt allocations: %w", err)
 		}
 		return tx.Model(&model.PurchaseReceipt{}).Where("id = ? AND company_id = ?", id, companyID).Updates(map[string]any{
-			"mitra_id":            dto.MitraID,
-			"purchase_invoice_id": newInvoice,
-			"number":              number,
-			"date":                date,
-			"amount":              dto.Amount,
-			"payment_method":      dto.PaymentMethod,
-			"bank_account_id":     trimPtr(dto.BankAccountID),
-			"notes":               utils.SanitizeRichText(dto.Notes),
-			"updated_at":          time.Now(),
-			"updated_by":          actorID,
+			"mitra_id":        dto.MitraID,
+			"number":          number,
+			"date":            date,
+			"amount":          total,
+			"payment_method":  dto.PaymentMethod,
+			"bank_account_id": trimPtr(dto.BankAccountID),
+			"notes":           utils.SanitizeRichText(dto.Notes),
+			"attachment_data": dto.AttachmentData,
+			"attachment_name": strings.TrimSpace(dto.AttachmentName),
+			"signature_data":  dto.SignatureData,
+			"updated_at":      time.Now(),
+			"updated_by":      actorID,
 		}).Error
 	})
 	if err != nil {
@@ -220,17 +305,15 @@ func (r *PurchaseReceiptRepository) Update(companyID, id string, dto *domain.Upd
 	return r.FindByID(companyID, id)
 }
 
-// Delete is a soft delete.
+// Delete soft-deletes the receipt and gives its allocations back to the invoices (allocation rows
+// are kept for the audit trail; every query that reads them joins on the non-deleted receipt).
 func (r *PurchaseReceiptRepository) Delete(companyID, id string) error {
-	existing, err := r.FindByID(companyID, id)
-	if err != nil {
+	if _, err := r.FindByID(companyID, id); err != nil {
 		return err
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if existing.PurchaseInvoiceID != nil {
-			if err := reversePurchaseInvoicePayment(tx, companyID, *existing.PurchaseInvoiceID, existing.Amount); err != nil {
-				return err
-			}
+		if err := reversePurchaseReceiptAllocations(tx, companyID, id); err != nil {
+			return err
 		}
 		if err := tx.Where("id = ? AND company_id = ?", id, companyID).Delete(&model.PurchaseReceipt{}).Error; err != nil {
 			return fmt.Errorf("delete purchase receipt %s: %w", id, err)
