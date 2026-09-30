@@ -27,120 +27,168 @@ func NewSalesInvoiceRepository(db *gorm.DB) domain.IRepository {
 }
 
 func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error) {
-	date, err := parseSalesInvoiceDate(dto.Date)
-	if err != nil {
+	if _, _, err := salesInvoiceDates(dto); err != nil {
 		return nil, err
 	}
-	dueDate, err := parseOptionalSalesInvoiceDate(dto.DueDate)
-	if err != nil {
-		return nil, err
-	}
-	if dueDate != nil && dueDate.Before(date) {
-		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
-	}
-
-	number := strings.TrimSpace(dto.Number)
-	if number != "" {
-		if exists, err := r.numberExists(dto.CompanyID, number, ""); err != nil {
-			return nil, err
-		} else if exists {
-			return nil, &domain.ErrNumberExists{Number: number}
-		}
-	}
-
 	var invoiceID string
-	err = r.db.Transaction(func(tx *gorm.DB) error {
-		n := number
-		if n == "" {
-			gen, err := generateSalesInvoiceNumber(tx, dto.CompanyID, model.SalesInvoiceKind(dto.Kind), date)
-			if err != nil {
-				return err
-			}
-			n = gen
-		}
-
-		invoice := &model.SalesInvoice{
-			ID:                       uuid.NewString(),
-			CompanyID:                dto.CompanyID,
-			SalesOrderID:             trimPtr(dto.SalesOrderID),
-			LinkedInvoiceID:          trimPtr(dto.LinkedInvoiceID),
-			MitraID:                  dto.MitraID,
-			Kind:                     model.SalesInvoiceKind(dto.Kind),
-			Number:                   n,
-			Date:                     date,
-			DueDate:                  dueDate,
-			RefNo:                    strings.TrimSpace(dto.RefNo),
-			Notes:                    utils.SanitizeRichText(dto.Notes),
-			Terms:                    utils.SanitizeRichText(dto.Terms),
-			Subtotal:                 calc.Subtotal,
-			DiscountTotal:            calc.DiscountTotal,
-			TaxTotal:                 calc.TaxTotal,
-			GrandTotal:               calc.GrandTotal,
-			AdditionalDiscountType:   calc.AdditionalDiscountType,
-			AdditionalDiscountValue:  calc.AdditionalDiscountValue,
-			AdditionalDiscountAmount: calc.AdditionalDiscountAmount,
-			ShippingCost:             dto.ShippingCost,
-			ShipFrom:                 strings.TrimSpace(dto.ShipFrom),
-			Salesperson:              strings.TrimSpace(dto.Salesperson),
-			AttachmentData:           dto.AttachmentData,
-			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
-			SignatureData:            dto.SignatureData,
-			StampDuty:                dto.StampDuty,
-			Template:                 templateFor(tx, dto),
-			PaymentTerm:              dto.PaymentTerm,
-			CreatedBy:                actorID,
-			UpdatedBy:                actorID,
-		}
-		snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
-		if err != nil {
-			if errors.Is(err, errContactInvalid) {
-				return &domain.ErrValidation{Message: err.Error()}
-			}
-			return err
-		}
-		invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
-		// order → invoice → down payment: a DP made from an order that already has an invoice applies to it.
-		if invoice.Kind == model.SalesInvoiceKindDownPayment && invoice.LinkedInvoiceID == nil {
-			target, err := invoiceOfOrder(tx, dto.CompanyID, invoice.SalesOrderID)
-			if err != nil {
-				return err
-			}
-			invoice.LinkedInvoiceID = target
-		}
-		if err := checkSalesInvoiceLinks(tx, dto.CompanyID, "", invoice.Kind, invoice.SalesOrderID, invoice.LinkedInvoiceID, calc.GrandTotal); err != nil {
-			return err
-		}
-		if err := tx.Create(invoice).Error; err != nil {
-			return fmt.Errorf("create sales invoice: %w", err)
-		}
-		if invoice.Kind == model.SalesInvoiceKindInvoice {
-			if err := adoptSalesOrderDownPayments(tx, dto.CompanyID, invoice.ID, invoice.SalesOrderID); err != nil {
-				return err
-			}
-			if err := adoptReferencedDownPayment(tx, dto.CompanyID, invoice.ID, invoice.LinkedInvoiceID); err != nil {
-				return err
-			}
-			if err := syncSalesInvoiceBalance(tx, dto.CompanyID, invoice.ID); err != nil {
-				return err
-			}
-		}
-		lines := buildSalesInvoiceLines(calc.Lines, dto.CompanyID, invoice.ID)
-		if err := tx.Create(&lines).Error; err != nil {
-			return fmt.Errorf("create sales invoice lines: %w", err)
-		}
-		lineTaxes := buildSalesInvoiceLineTaxes(lines, calc.Lines)
-		if len(lineTaxes) > 0 {
-			if err := tx.Create(&lineTaxes).Error; err != nil {
-				return fmt.Errorf("create sales invoice line taxes: %w", err)
-			}
-		}
-		invoiceID = invoice.ID
-		return nil
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		invoiceID, err = createSalesInvoiceTx(tx, dto, calc, actorID)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return r.FindByID(dto.CompanyID, invoiceID)
+}
+
+// CreateMany — the import: every invoice in ONE transaction, so a file lands completely or not at all.
+// Returns the created invoices' ids and numbers, in order.
+func (r *SalesInvoiceRepository) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+	out := make([]domain.ImportCreated, 0, len(items))
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		for _, it := range items {
+			id, err := createSalesInvoiceTx(tx, it.DTO, it.Calc, actorID)
+			if err != nil {
+				return err
+			}
+			var number string
+			if err := tx.Model(&model.SalesInvoice{}).Where("id = ?", id).Pluck("number", &number).Error; err != nil {
+				return fmt.Errorf("read sales invoice number: %w", err)
+			}
+			out = append(out, domain.ImportCreated{ID: id, Number: number})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// salesInvoiceDates parses the invoice and due dates; the due date can't be before the invoice date.
+func salesInvoiceDates(dto *domain.CreateDTO) (time.Time, *time.Time, error) {
+	date, err := parseSalesInvoiceDate(dto.Date)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	dueDate, err := parseOptionalSalesInvoiceDate(dto.DueDate)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	if dueDate != nil && dueDate.Before(date) {
+		return time.Time{}, nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+	}
+	return date, dueDate, nil
+}
+
+// createSalesInvoiceTx inserts one invoice with its lines and line taxes inside tx.
+func createSalesInvoiceTx(tx *gorm.DB, dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (string, error) {
+	date, dueDate, err := salesInvoiceDates(dto)
+	if err != nil {
+		return "", err
+	}
+
+	number := strings.TrimSpace(dto.Number)
+	if number != "" {
+		if exists, err := salesInvoiceNumberExists(tx, dto.CompanyID, number, ""); err != nil {
+			return "", err
+		} else if exists {
+			return "", &domain.ErrNumberExists{Number: number}
+		}
+	}
+
+	n := number
+	if n == "" {
+		gen, err := generateSalesInvoiceNumber(tx, dto.CompanyID, model.SalesInvoiceKind(dto.Kind), date)
+		if err != nil {
+			return "", err
+		}
+		n = gen
+	}
+
+	invoice := &model.SalesInvoice{
+		ID:                       uuid.NewString(),
+		CompanyID:                dto.CompanyID,
+		SalesOrderID:             trimPtr(dto.SalesOrderID),
+		LinkedInvoiceID:          trimPtr(dto.LinkedInvoiceID),
+		MitraID:                  dto.MitraID,
+		Kind:                     model.SalesInvoiceKind(dto.Kind),
+		Number:                   n,
+		Date:                     date,
+		DueDate:                  dueDate,
+		RefNo:                    strings.TrimSpace(dto.RefNo),
+		Notes:                    utils.SanitizeRichText(dto.Notes),
+		Terms:                    utils.SanitizeRichText(dto.Terms),
+		Subtotal:                 calc.Subtotal,
+		DiscountTotal:            calc.DiscountTotal,
+		TaxTotal:                 calc.TaxTotal,
+		GrandTotal:               calc.GrandTotal,
+		AdditionalDiscountType:   calc.AdditionalDiscountType,
+		AdditionalDiscountValue:  calc.AdditionalDiscountValue,
+		AdditionalDiscountAmount: calc.AdditionalDiscountAmount,
+		ShippingCost:             dto.ShippingCost,
+		ShipFrom:                 strings.TrimSpace(dto.ShipFrom),
+		AttachmentData:           dto.AttachmentData,
+		AttachmentName:           strings.TrimSpace(dto.AttachmentName),
+		SignatureData:            dto.SignatureData,
+		StampDuty:                dto.StampDuty,
+		Template:                 templateFor(tx, dto),
+		PaymentTerm:              dto.PaymentTerm,
+		CreatedBy:                actorID,
+		UpdatedBy:                actorID,
+	}
+	snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
+	if err != nil {
+		if errors.Is(err, errContactInvalid) {
+			return "", &domain.ErrValidation{Message: err.Error()}
+		}
+		return "", err
+	}
+	invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
+	if invoice.SalespersonID, invoice.Salesperson, err = salespersonSnapshot(tx, dto.CompanyID, dto.SalespersonID, dto.Salesperson, ""); err != nil {
+		var sp *errSalesperson
+		if errors.As(err, &sp) {
+			return "", &domain.ErrValidation{Message: err.Error()}
+		}
+		return "", err
+	}
+	// order → invoice → down payment: a DP made from an order that already has an invoice applies to it.
+	if invoice.Kind == model.SalesInvoiceKindDownPayment && invoice.LinkedInvoiceID == nil {
+		target, err := invoiceOfOrder(tx, dto.CompanyID, invoice.SalesOrderID)
+		if err != nil {
+			return "", err
+		}
+		invoice.LinkedInvoiceID = target
+	}
+	if err := checkSalesInvoiceLinks(tx, dto.CompanyID, "", invoice.Kind, invoice.SalesOrderID, invoice.LinkedInvoiceID, calc.GrandTotal); err != nil {
+		return "", err
+	}
+	if err := tx.Create(invoice).Error; err != nil {
+		return "", fmt.Errorf("create sales invoice: %w", err)
+	}
+	if invoice.Kind == model.SalesInvoiceKindInvoice {
+		if err := adoptSalesOrderDownPayments(tx, dto.CompanyID, invoice.ID, invoice.SalesOrderID); err != nil {
+			return "", err
+		}
+		if err := adoptReferencedDownPayment(tx, dto.CompanyID, invoice.ID, invoice.LinkedInvoiceID); err != nil {
+			return "", err
+		}
+		if err := syncSalesInvoiceBalance(tx, dto.CompanyID, invoice.ID); err != nil {
+			return "", err
+		}
+	}
+	lines := buildSalesInvoiceLines(calc.Lines, dto.CompanyID, invoice.ID)
+	if err := tx.Create(&lines).Error; err != nil {
+		return "", fmt.Errorf("create sales invoice lines: %w", err)
+	}
+	lineTaxes := buildSalesInvoiceLineTaxes(lines, calc.Lines)
+	if len(lineTaxes) > 0 {
+		if err := tx.Create(&lineTaxes).Error; err != nil {
+			return "", fmt.Errorf("create sales invoice line taxes: %w", err)
+		}
+	}
+	return invoice.ID, nil
 }
 
 func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.UpdateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error) {
@@ -210,7 +258,6 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 			"additional_discount_amount": calc.AdditionalDiscountAmount,
 			"shipping_cost":              dto.ShippingCost,
 			"ship_from":                  strings.TrimSpace(dto.ShipFrom),
-			"salesperson":                strings.TrimSpace(dto.Salesperson),
 			"attachment_data":            dto.AttachmentData,
 			"attachment_name":            strings.TrimSpace(dto.AttachmentName),
 			"signature_data":             dto.SignatureData,
@@ -221,6 +268,19 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 		// A client that doesn't send `template` must not reset the saved choice.
 		if strings.TrimSpace(dto.Template) != "" {
 			updates["template"] = strings.TrimSpace(dto.Template)
+		}
+		// Same salesperson as before: its name snapshot stays as it was (an issued document never
+		// changes because the master was renamed); another one (or none) is snapshotted afresh.
+		if sid := derefStr(dto.SalespersonID); sid == "" || sid != derefStr(existing.SalespersonID) {
+			spID, spName, err := salespersonSnapshot(tx, companyID, dto.SalespersonID, dto.Salesperson, derefStr(existing.SalespersonID))
+			if err != nil {
+				var sp *errSalesperson
+				if errors.As(err, &sp) {
+					return &domain.ErrValidation{Message: err.Error()}
+				}
+				return err
+			}
+			updates["salesperson_id"], updates["salesperson"] = spID, spName
 		}
 		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
 		if err != nil {
@@ -315,6 +375,9 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 	}
 	if f.MitraID != "" {
 		q = q.Where("mitra_id = ?", f.MitraID)
+	}
+	if f.SalespersonID != "" {
+		q = q.Where("salesperson_id = ?", f.SalespersonID)
 	}
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)
@@ -432,7 +495,11 @@ func (r *SalesInvoiceRepository) TaxRates(companyID string, taxIDs []string) (ma
 }
 
 func (r *SalesInvoiceRepository) numberExists(companyID, number, exceptID string) (bool, error) {
-	q := r.db.Model(&model.SalesInvoice{}).Where("company_id = ? AND lower(number) = lower(?)", companyID, number)
+	return salesInvoiceNumberExists(r.db, companyID, number, exceptID)
+}
+
+func salesInvoiceNumberExists(db *gorm.DB, companyID, number, exceptID string) (bool, error) {
+	q := db.Model(&model.SalesInvoice{}).Where("company_id = ? AND lower(number) = lower(?)", companyID, number)
 	if exceptID != "" {
 		q = q.Where("id <> ?", exceptID)
 	}

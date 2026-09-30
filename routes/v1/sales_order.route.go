@@ -12,6 +12,8 @@ func SalesOrderRoutes(router fiber.Router, ctrl *controller.SalesOrderController
 	g := router.Group("/sales-orders")
 	g.Get("/", middlewares.RequirePermission("invoice-sales-order-list"), ctrl.List)
 	g.Get("/next-number", middlewares.RequirePermission("invoice-sales-order-create"), ctrl.PreviewNumber)
+	g.Post("/bulk-confirm", middlewares.RequirePermission("invoice-sales-order-update"), ctrl.BulkConfirm)
+	g.Post("/bulk-draft", middlewares.RequirePermission("invoice-sales-order-update"), ctrl.BulkBackToDraft)
 	g.Get("/:id", middlewares.RequirePermission("invoice-sales-order-list"), ctrl.Get)
 	g.Post("/", middlewares.RequirePermission("invoice-sales-order-create"), ctrl.Create)
 	g.Put("/:id", middlewares.RequirePermission("invoice-sales-order-update"), ctrl.Update)

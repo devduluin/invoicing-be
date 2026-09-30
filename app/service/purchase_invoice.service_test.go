@@ -16,6 +16,37 @@ type fakePurchaseInvoiceRepo struct {
 	invoice     *model.PurchaseInvoice
 	taxRates    map[string]utils.TaxRate
 	mitraExists bool
+	imported    []domain.ImportItem
+}
+
+func (f *fakePurchaseInvoiceRepo) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+	f.imported = items
+	out := make([]domain.ImportCreated, len(items))
+	for i, it := range items {
+		out[i] = domain.ImportCreated{ID: "id", Number: it.DTO.Number}
+	}
+	return out, nil
+}
+
+func TestPurchaseInvoiceImport(t *testing.T) {
+	row := func(r int, number string) domain.ImportRow {
+		return domain.ImportRow{Row: r, CreateDTO: domain.CreateDTO{
+			MitraID: "m1", Number: number, Date: "2026-09-01",
+			Lines: []domain.LineDTO{{ProductName: "A", Quantity: 3, UnitPrice: 1000}},
+		}}
+	}
+	repo := &fakePurchaseInvoiceRepo{mitraExists: true}
+	svc := &PurchaseInvoiceService{repo: repo, activation: &fakeTxnLimiter{capacity: 10}}
+	if created, err := svc.Import("c1", "actor", []domain.ImportRow{row(2, "B/1"), row(3, "B/2")}); err != nil || len(created) != 2 || repo.imported[0].Calc.GrandTotal != 3000 {
+		t.Fatalf("want 2 invoices of 3000, got %v, %v", created, err)
+	}
+	if _, err := svc.Import("c1", "actor", []domain.ImportRow{row(2, "B/1"), row(7, "b/1")}); err == nil || err.Error() != "Row 7: invoice no. b/1 is also used on row 2" {
+		t.Fatalf("got %v", err)
+	}
+	svc = &PurchaseInvoiceService{repo: &fakePurchaseInvoiceRepo{mitraExists: true}, activation: &fakeTxnLimiter{capacity: 1}}
+	if _, err := svc.Import("c1", "actor", []domain.ImportRow{row(2, ""), row(3, "")}); err == nil {
+		t.Fatal("want the monthly cap to refuse the whole file")
+	}
 }
 
 func (f *fakePurchaseInvoiceRepo) Create(dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (*model.PurchaseInvoice, error) {

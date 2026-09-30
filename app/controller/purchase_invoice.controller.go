@@ -2,11 +2,13 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/gofiber/fiber/v2"
 
 	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/purchaseinvoice"
+	"duluin_invoice/app/model"
 	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
@@ -81,6 +83,41 @@ func (ctrl *PurchaseInvoiceController) Create(c *fiber.Ctx) error {
 	return utils.Created(c, row, "Invoice added")
 }
 
+// Import — POST /purchase-invoices/import: the invoices of an import file (supplier and taxes already
+// resolved to ids by the client), saved all or nothing as drafts. Every row is validated first and
+// all problems are returned together, each prefixed with its spreadsheet row.
+func (ctrl *PurchaseInvoiceController) Import(c *fiber.Ctx) error {
+	var body domain.ImportDTO
+	if err := c.BodyParser(&body); err != nil {
+		return utils.BadRequest(c, []string{"Invalid request body"})
+	}
+	if len(body.Invoices) == 0 {
+		return utils.ValidationFailed(c, []string{"The file has no invoices to import"})
+	}
+	if len(body.Invoices) > domain.MaxImportInvoices {
+		return utils.ValidationFailed(c, []string{fmt.Sprintf("At most %d invoices can be imported at once", domain.MaxImportInvoices)})
+	}
+	var msgs []string
+	for i := range body.Invoices {
+		r := &body.Invoices[i]
+		for _, m := range validation.Struct(&r.CreateDTO) {
+			msgs = append(msgs, fmt.Sprintf("Row %d: %s", r.Row, m))
+		}
+	}
+	if msgs != nil {
+		return utils.ValidationFailed(c, msgs)
+	}
+
+	created, err := ctrl.svc.Import(middlewares.GetCompanyID(c), middlewares.GetUserID(c), body.Invoices)
+	if err != nil {
+		return purchaseInvoiceErr(c, err)
+	}
+	for _, inv := range created {
+		ctrl.doc.record(c, audit.ActionCreated, inv.ID, inv.Number, "Imported "+inv.Number, nil)
+	}
+	return utils.Created(c, fiber.Map{"created": len(created), "invoices": created}, fmt.Sprintf("%d invoices imported", len(created)))
+}
+
 func (ctrl *PurchaseInvoiceController) Update(c *fiber.Ctx) error {
 	var dto domain.UpdateDTO
 	if err := c.BodyParser(&dto); err != nil {
@@ -108,35 +145,97 @@ func (ctrl *PurchaseInvoiceController) Update(c *fiber.Ctx) error {
 	return utils.Ok(c, row, "Invoice updated")
 }
 
-func (ctrl *PurchaseInvoiceController) Delete(c *fiber.Ctx) error {
-	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
-	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
-		return purchaseInvoiceErr(c, err)
+// deleteOne — the guarded delete + its audit entry, shared by Delete and BulkDelete.
+func (ctrl *PurchaseInvoiceController) deleteOne(c *fiber.Ctx, id string) error {
+	companyID := middlewares.GetCompanyID(c)
+	before, _ := ctrl.svc.Get(companyID, id)
+	if err := ctrl.svc.Delete(companyID, id); err != nil {
+		return err
 	}
 	if before != nil {
 		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
+	return nil
+}
+
+func (ctrl *PurchaseInvoiceController) Delete(c *fiber.Ctx) error {
+	if err := ctrl.deleteOne(c, c.Params("id")); err != nil {
+		return purchaseInvoiceErr(c, err)
+	}
 	return utils.Deleted(c, "Invoice deleted")
 }
 
-func (ctrl *PurchaseInvoiceController) Confirm(c *fiber.Ctx) error {
-	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
+// POST bulk-delete — {"ids": [...]}, up to 100 at once. Each id goes through the exact same guarded
+// delete as the single-row endpoint; a row that's still referenced fails on its own without blocking
+// the rest of the batch.
+func (ctrl *PurchaseInvoiceController) BulkDelete(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error { return ctrl.deleteOne(c, id) }, "Bulk delete processed")
+}
+
+// confirmOne / draftOne — the status change + its audit entry, shared by the single-row and bulk endpoints.
+func (ctrl *PurchaseInvoiceController) confirmOne(c *fiber.Ctx, id string) (*model.PurchaseInvoice, error) {
+	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), id)
 	if err != nil {
-		return purchaseInvoiceErr(c, err)
+		return nil, err
 	}
 	if !confirmsJustCreated(c, row.CreatedAt, row.CreatedBy) {
 		ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
 	}
-	return utils.Ok(c, row, "Invoice confirmed")
+	return row, nil
 }
 
-func (ctrl *PurchaseInvoiceController) BackToDraft(c *fiber.Ctx) error {
-	row, err := ctrl.svc.BackToDraft(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
+func (ctrl *PurchaseInvoiceController) draftOne(c *fiber.Ctx, id string) (*model.PurchaseInvoice, error) {
+	row, err := ctrl.svc.BackToDraft(middlewares.GetCompanyID(c), middlewares.GetUserID(c), id)
+	if err != nil {
+		return nil, err
+	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Moved back to draft:", "confirmed", string(row.Status))
+	return row, nil
+}
+
+func (ctrl *PurchaseInvoiceController) Confirm(c *fiber.Ctx) error {
+	row, err := ctrl.confirmOne(c, c.Params("id"))
 	if err != nil {
 		return purchaseInvoiceErr(c, err)
 	}
-	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Moved back to draft:", "confirmed", string(row.Status))
+	return utils.Ok(c, row, "Invoice confirmed")
+}
+
+// POST bulk-confirm — {"ids": [...]}: confirms each draft on its own (a non-draft or invalid one fails
+// alone, the rest go through).
+func (ctrl *PurchaseInvoiceController) BulkConfirm(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error {
+		_, err := ctrl.confirmOne(c, id)
+		return err
+	}, "Bulk confirm processed")
+}
+
+func (ctrl *PurchaseInvoiceController) BackToDraft(c *fiber.Ctx) error {
+	row, err := ctrl.draftOne(c, c.Params("id"))
+	if err != nil {
+		return purchaseInvoiceErr(c, err)
+	}
 	return utils.Ok(c, row, "Invoice moved back to draft")
+}
+
+// POST bulk-draft — {"ids": [...]}: moves each document back to draft on its own.
+func (ctrl *PurchaseInvoiceController) BulkBackToDraft(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error {
+		_, err := ctrl.draftOne(c, id)
+		return err
+	}, "Bulk back to draft processed")
 }
 
 func (ctrl *PurchaseInvoiceController) Cancel(c *fiber.Ctx) error {

@@ -16,6 +16,7 @@ type fakeSalesInvoiceRepo struct {
 	invoice     *model.SalesInvoice
 	taxRates    map[string]utils.TaxRate
 	mitraExists bool
+	imported    []domain.ImportItem
 }
 
 func (f *fakeSalesInvoiceRepo) Create(dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error) {
@@ -54,6 +55,72 @@ func (f *fakeSalesInvoiceRepo) MitraExists(companyID, mitraID string) (bool, err
 }
 func (f *fakeSalesInvoiceRepo) TaxRates(companyID string, taxIDs []string) (map[string]utils.TaxRate, error) {
 	return f.taxRates, nil
+}
+
+func (f *fakeSalesInvoiceRepo) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+	f.imported = items
+	out := make([]domain.ImportCreated, len(items))
+	for i, it := range items {
+		out[i] = domain.ImportCreated{ID: "id", Number: it.DTO.Number}
+	}
+	return out, nil
+}
+
+// fakeTxnLimiter — capacity is how many transactions may still be created this month.
+type fakeTxnLimiter struct{ capacity int }
+
+func (f *fakeTxnLimiter) CheckTransactionLimit(companyID string) error {
+	return f.CheckTransactionCapacity(companyID, 1)
+}
+func (f *fakeTxnLimiter) CheckTransactionCapacity(companyID string, adding int) error {
+	if adding > f.capacity {
+		return errors.New("limit reached")
+	}
+	return nil
+}
+func (f *fakeTxnLimiter) Recompute(companyID string) {}
+
+func TestSalesInvoiceImport(t *testing.T) {
+	row := func(r int, number string) domain.ImportRow {
+		return domain.ImportRow{Row: r, CreateDTO: domain.CreateDTO{
+			MitraID: "m1", Number: number, Date: "2026-09-01", DueDate: "2026-09-30",
+			Lines: []domain.LineDTO{siLine("A", 2, 1000)},
+		}}
+	}
+
+	t.Run("saves every invoice as a regular invoice", func(t *testing.T) {
+		repo := &fakeSalesInvoiceRepo{mitraExists: true}
+		svc := &SalesInvoiceService{repo: repo, activation: &fakeTxnLimiter{capacity: 10}}
+		in := row(2, "INV/1")
+		in.Kind = "down_payment"
+		created, err := svc.Import("c1", "actor", []domain.ImportRow{in, row(4, "INV/2")})
+		if err != nil || len(created) != 2 {
+			t.Fatalf("want 2 created, got %v, %v", created, err)
+		}
+		if repo.imported[0].DTO.Kind != "invoice" || repo.imported[0].Calc.GrandTotal != 2000 {
+			t.Fatalf("want a regular invoice of 2000, got %s %v", repo.imported[0].DTO.Kind, repo.imported[0].Calc.GrandTotal)
+		}
+	})
+
+	t.Run("names the row of a duplicate number or a missing partner", func(t *testing.T) {
+		svc := &SalesInvoiceService{repo: &fakeSalesInvoiceRepo{mitraExists: true}, activation: &fakeTxnLimiter{capacity: 10}}
+		_, err := svc.Import("c1", "actor", []domain.ImportRow{row(2, "INV/1"), row(5, "inv/1")})
+		if err == nil || err.Error() != "Row 5: invoice no. inv/1 is also used on row 2" {
+			t.Fatalf("got %v", err)
+		}
+		svc = &SalesInvoiceService{repo: &fakeSalesInvoiceRepo{}, activation: &fakeTxnLimiter{capacity: 10}}
+		if _, err := svc.Import("c1", "actor", []domain.ImportRow{row(3, "")}); err == nil || err.Error() != "Row 3: partner not found" {
+			t.Fatalf("got %v", err)
+		}
+	})
+
+	t.Run("checks the monthly cap for the whole file", func(t *testing.T) {
+		repo := &fakeSalesInvoiceRepo{mitraExists: true}
+		svc := &SalesInvoiceService{repo: repo, activation: &fakeTxnLimiter{capacity: 1}}
+		if _, err := svc.Import("c1", "actor", []domain.ImportRow{row(2, ""), row(3, "")}); err == nil || repo.imported != nil {
+			t.Fatalf("want the cap to refuse the file before saving, got %v", err)
+		}
+	})
 }
 
 func siLine(product string, qty, price float64) domain.LineDTO {

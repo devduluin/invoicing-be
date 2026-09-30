@@ -10,6 +10,7 @@ import (
 // the Free-tier cap, and let a qualifying partner trip the one-way activation flip right away.
 type activationLimiter interface {
 	CheckPartnerLimit(companyID string) error
+	CheckPartnerCapacity(companyID string, adding int) error
 	Recompute(companyID string)
 }
 
@@ -38,6 +39,26 @@ func (s *MitraService) Create(companyID, actorID string, dto *domain.CreateMitra
 	return m, nil
 }
 
+// Import creates every partner of an import file, all or nothing. The Free-tier cap is checked for
+// the whole file up front, so an import never stops half way at the limit.
+func (s *MitraService) Import(companyID, actorID string, dtos []*domain.CreateMitraDTO) ([]*model.Mitra, error) {
+	for _, dto := range dtos {
+		dto.CompanyID = companyID
+		if !model.IsValidMitraType(dto.Type) {
+			return nil, &domain.ErrValidation{Message: dto.Name + ": invalid partner type"}
+		}
+	}
+	if err := s.activation.CheckPartnerCapacity(companyID, len(dtos)); err != nil {
+		return nil, err
+	}
+	out, err := s.repo.CreateMany(dtos, actorID)
+	if err != nil {
+		return nil, err
+	}
+	s.activation.Recompute(companyID)
+	return out, nil
+}
+
 func (s *MitraService) Update(companyID, actorID, id string, dto *domain.UpdateMitraDTO) (*model.Mitra, error) {
 	if dto.Type != "" && !model.IsValidMitraType(dto.Type) {
 		return nil, &domain.ErrValidation{Message: "invalid partner type"}
@@ -51,6 +72,10 @@ func (s *MitraService) Get(companyID, id string) (*model.Mitra, error) {
 
 func (s *MitraService) List(filter *domain.MitraFilter) (*utils.OffsetPaginationResult, error) {
 	return s.repo.FindAll(filter)
+}
+
+func (s *MitraService) NextCode(companyID string) (string, error) {
+	return s.repo.NextCode(companyID)
 }
 
 func (s *MitraService) Delete(companyID, id string) error {

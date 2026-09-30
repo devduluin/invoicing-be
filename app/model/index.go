@@ -18,6 +18,7 @@ func AllModels() []interface{} {
 		&Account{},
 		&Tax{},
 		&Unit{},
+		&Salesperson{},
 		&JournalBook{},
 		&JournalEntry{},
 		&JournalLine{},
@@ -95,6 +96,19 @@ func ensurePartialIndexes(db *gorm.DB) error {
 		 WHERE deleted_at IS NULL AND email <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_user_account_sso_role_active
 		 ON user_account_sso (role_id) WHERE deleted_at IS NULL`,
+		// code <> '': rows created before the column existed are empty until BackfillMitraCodesOnce runs.
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_mitra_company_code_active
+		 ON mitra (company_id, lower(code)) WHERE deleted_at IS NULL AND code <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_mitra_company_linked_active
+		 ON mitra (company_id, linked_company_id) WHERE deleted_at IS NULL AND linked_company_id IS NOT NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_salespersons_company_code_active
+		 ON salespersons (company_id, lower(code)) WHERE deleted_at IS NULL AND code <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_salespersons_company_user_active
+		 ON salespersons (company_id, user_id) WHERE deleted_at IS NULL AND user_id <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_orders_company_salesperson_active
+		 ON sales_orders (company_id, salesperson_id) WHERE deleted_at IS NULL AND salesperson_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_invoices_company_salesperson_active
+		 ON sales_invoices (company_id, salesperson_id) WHERE deleted_at IS NULL AND salesperson_id IS NOT NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_company_code_active
 		 ON accounts (company_id, lower(code)) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_bank_accounts_company_active

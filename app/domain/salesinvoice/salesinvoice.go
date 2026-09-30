@@ -49,14 +49,43 @@ type CreateDTO struct {
 
 	// Free-text meta, attachment, and signature/stamp-duty — see
 	// app/model/sales_invoice.go.
-	ShipFrom       string `json:"ship_from"       validate:"omitempty,max=150"`
-	Salesperson    string `json:"salesperson"     validate:"omitempty,max=120"`
-	AttachmentData string `json:"attachment_data" validate:"omitempty"`
-	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
-	SignatureData  string `json:"signature_data"  validate:"omitempty"`
-	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
+	ShipFrom    string `json:"ship_from"       validate:"omitempty,max=150"`
+	Salesperson string `json:"salesperson"     validate:"omitempty,max=120"`
+	// SalespersonID — a salesperson of the company; the server snapshots its name into Salesperson.
+	SalespersonID  *string `json:"salesperson_id" validate:"omitempty,uuid4"`
+	AttachmentData string  `json:"attachment_data" validate:"omitempty"`
+	AttachmentName string  `json:"attachment_name" validate:"omitempty,max=255"`
+	SignatureData  string  `json:"signature_data"  validate:"omitempty"`
+	StampDuty      bool    `json:"stamp_duty"      validate:"omitempty"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
+}
+
+// ImportRow is one invoice from the import file. Row is the spreadsheet row of the invoice's first
+// line, only used to point error messages at the right place. Kind is always "invoice".
+type ImportRow struct {
+	Row int `json:"row"`
+	CreateDTO
+}
+
+// ImportDTO — POST /sales-invoices/import. Saved all-or-nothing.
+type ImportDTO struct {
+	Invoices []ImportRow `json:"invoices"`
+}
+
+// MaxImportInvoices caps one import file.
+const MaxImportInvoices = 500
+
+// ImportItem — one validated invoice with its computed totals, ready to insert.
+type ImportItem struct {
+	DTO  *CreateDTO
+	Calc *utils.LinesCalc
+}
+
+// ImportCreated — an invoice the import created.
+type ImportCreated struct {
+	ID     string `json:"id"`
+	Number string `json:"number"`
 }
 
 // UpdateDTO — a full replace: header fields + the complete new line set.
@@ -82,12 +111,14 @@ type UpdateDTO struct {
 	AdditionalDiscountValue float64 `json:"additional_discount_value" validate:"omitempty,gte=0"`
 	ShippingCost            float64 `json:"shipping_cost"             validate:"omitempty,gte=0"`
 
-	ShipFrom       string `json:"ship_from"       validate:"omitempty,max=150"`
-	Salesperson    string `json:"salesperson"     validate:"omitempty,max=120"`
-	AttachmentData string `json:"attachment_data" validate:"omitempty"`
-	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
-	SignatureData  string `json:"signature_data"  validate:"omitempty"`
-	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
+	ShipFrom    string `json:"ship_from"       validate:"omitempty,max=150"`
+	Salesperson string `json:"salesperson"     validate:"omitempty,max=120"`
+	// SalespersonID — a salesperson of the company; the server snapshots its name into Salesperson.
+	SalespersonID  *string `json:"salesperson_id" validate:"omitempty,uuid4"`
+	AttachmentData string  `json:"attachment_data" validate:"omitempty"`
+	AttachmentName string  `json:"attachment_name" validate:"omitempty,max=255"`
+	SignatureData  string  `json:"signature_data"  validate:"omitempty"`
+	StampDuty      bool    `json:"stamp_duty"      validate:"omitempty"`
 
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
@@ -99,7 +130,9 @@ type Filter struct {
 	Kind      string
 	Search    string
 	MitraID   string
-	Status    string
+	// SalespersonID narrows the list to one salesperson's invoices.
+	SalespersonID string
+	Status        string
 	// PaymentStatus (unpaid | partially_paid | paid) and Overdue (confirmed, not fully
 	// paid, due date before today) narrow the list for the "what needs collecting" views.
 	PaymentStatus string
@@ -113,6 +146,8 @@ type Filter struct {
 
 type IRepository interface {
 	Create(dto *CreateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error)
+	// CreateMany saves every invoice in one transaction (the import).
+	CreateMany(items []ImportItem, actorID string) ([]ImportCreated, error)
 	Update(companyID, id string, dto *UpdateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error)
 	FindByID(companyID, id string) (*model.SalesInvoice, error)
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
@@ -133,6 +168,8 @@ type IRepository interface {
 
 type IService interface {
 	Create(companyID, actorID string, dto *CreateDTO) (*model.SalesInvoice, error)
+	// Import creates the regular invoices of an import file, all or nothing.
+	Import(companyID, actorID string, rows []ImportRow) ([]ImportCreated, error)
 	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.SalesInvoice, error)
 	Get(companyID, id string) (*model.SalesInvoice, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)

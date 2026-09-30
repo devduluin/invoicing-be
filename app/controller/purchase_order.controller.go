@@ -7,6 +7,7 @@ import (
 
 	audit "duluin_invoice/app/domain/audit"
 	domain "duluin_invoice/app/domain/purchaseorder"
+	"duluin_invoice/app/model"
 	"duluin_invoice/app/sso"
 	"duluin_invoice/app/validation"
 	"duluin_invoice/middlewares"
@@ -106,35 +107,97 @@ func (ctrl *PurchaseOrderController) Update(c *fiber.Ctx) error {
 	return utils.Ok(c, row, "Purchase order updated")
 }
 
-func (ctrl *PurchaseOrderController) Delete(c *fiber.Ctx) error {
-	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
-	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
-		return purchaseOrderErr(c, err)
+// deleteOne — the guarded delete + its audit entry, shared by Delete and BulkDelete.
+func (ctrl *PurchaseOrderController) deleteOne(c *fiber.Ctx, id string) error {
+	companyID := middlewares.GetCompanyID(c)
+	before, _ := ctrl.svc.Get(companyID, id)
+	if err := ctrl.svc.Delete(companyID, id); err != nil {
+		return err
 	}
 	if before != nil {
 		ctrl.doc.record(c, audit.ActionDeleted, before.ID, before.Number, "Deleted "+before.Number, nil)
 	}
+	return nil
+}
+
+func (ctrl *PurchaseOrderController) Delete(c *fiber.Ctx) error {
+	if err := ctrl.deleteOne(c, c.Params("id")); err != nil {
+		return purchaseOrderErr(c, err)
+	}
 	return utils.Deleted(c, "Purchase order deleted")
 }
 
-func (ctrl *PurchaseOrderController) Confirm(c *fiber.Ctx) error {
-	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
+// POST bulk-delete — {"ids": [...]}, up to 100 at once. Each id goes through the exact same guarded
+// delete as the single-row endpoint; a row that's still referenced fails on its own without blocking
+// the rest of the batch.
+func (ctrl *PurchaseOrderController) BulkDelete(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error { return ctrl.deleteOne(c, id) }, "Bulk delete processed")
+}
+
+// confirmOne / draftOne — the status change + its audit entry, shared by the single-row and bulk endpoints.
+func (ctrl *PurchaseOrderController) confirmOne(c *fiber.Ctx, id string) (*model.PurchaseOrder, error) {
+	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), id)
 	if err != nil {
-		return purchaseOrderErr(c, err)
+		return nil, err
 	}
 	if !confirmsJustCreated(c, row.CreatedAt, row.CreatedBy) {
 		ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Confirmed", "draft", string(row.Status))
 	}
-	return utils.Ok(c, row, "Purchase order confirmed")
+	return row, nil
 }
 
-func (ctrl *PurchaseOrderController) BackToDraft(c *fiber.Ctx) error {
-	row, err := ctrl.svc.BackToDraft(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
+func (ctrl *PurchaseOrderController) draftOne(c *fiber.Ctx, id string) (*model.PurchaseOrder, error) {
+	row, err := ctrl.svc.BackToDraft(middlewares.GetCompanyID(c), middlewares.GetUserID(c), id)
+	if err != nil {
+		return nil, err
+	}
+	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Moved back to draft:", "confirmed", string(row.Status))
+	return row, nil
+}
+
+func (ctrl *PurchaseOrderController) Confirm(c *fiber.Ctx) error {
+	row, err := ctrl.confirmOne(c, c.Params("id"))
 	if err != nil {
 		return purchaseOrderErr(c, err)
 	}
-	ctrl.doc.statusChange(c, audit.ActionStatusChanged, row.ID, row.Number, "Moved back to draft:", "confirmed", string(row.Status))
+	return utils.Ok(c, row, "Purchase order confirmed")
+}
+
+// POST bulk-confirm — {"ids": [...]}: confirms each draft on its own (a non-draft or invalid one fails
+// alone, the rest go through).
+func (ctrl *PurchaseOrderController) BulkConfirm(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error {
+		_, err := ctrl.confirmOne(c, id)
+		return err
+	}, "Bulk confirm processed")
+}
+
+func (ctrl *PurchaseOrderController) BackToDraft(c *fiber.Ctx) error {
+	row, err := ctrl.draftOne(c, c.Params("id"))
+	if err != nil {
+		return purchaseOrderErr(c, err)
+	}
 	return utils.Ok(c, row, "Purchase order moved back to draft")
+}
+
+// POST bulk-draft — {"ids": [...]}: moves each document back to draft on its own.
+func (ctrl *PurchaseOrderController) BulkBackToDraft(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error {
+		_, err := ctrl.draftOne(c, id)
+		return err
+	}, "Bulk back to draft processed")
 }
 
 func (ctrl *PurchaseOrderController) Cancel(c *fiber.Ctx) error {

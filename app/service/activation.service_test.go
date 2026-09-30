@@ -133,6 +133,19 @@ func TestActivationLimits_RejectOverInitialCap(t *testing.T) {
 	}
 }
 
+func TestActivationLimits_ImportCountsWholeFile(t *testing.T) {
+	companies := &fakeActivationCompanies{company: completeCompany()} // initial cap: 10
+	svc := newActivationTestSvc(companies, 7, &fakeActivationCounts{})
+
+	if err := svc.CheckPartnerCapacity("c1", 3); err != nil {
+		t.Fatalf("7 + 3 fits the cap of 10, got %v", err)
+	}
+	var limit *domain.ErrLimitReached
+	if err := svc.CheckPartnerCapacity("c1", 4); !errors.As(err, &limit) {
+		t.Fatalf("7 + 4 is over the cap of 10, want ErrLimitReached, got %v", err)
+	}
+}
+
 func TestActivationLimits_FullTierAfterActivation(t *testing.T) {
 	companies := &fakeActivationCompanies{company: &model.Company{ID: "c1", ActivationStatus: domain.StatusActivated}}
 	invoices := &fakeActivationCounts{}

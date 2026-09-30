@@ -66,7 +66,6 @@ func (r *SalesOrderRepository) Create(dto *domain.CreateDTO, calc *domain.OrderC
 			AdditionalDiscountValue:  calc.AdditionalDiscountValue,
 			AdditionalDiscountAmount: calc.AdditionalDiscountAmount,
 			ShipFrom:                 strings.TrimSpace(dto.ShipFrom),
-			Salesperson:              strings.TrimSpace(dto.Salesperson),
 			AttachmentData:           dto.AttachmentData,
 			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
 			SignatureData:            dto.SignatureData,
@@ -78,6 +77,13 @@ func (r *SalesOrderRepository) Create(dto *domain.CreateDTO, calc *domain.OrderC
 		snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
 		if err != nil {
 			if errors.Is(err, errContactInvalid) {
+				return &domain.ErrValidation{Message: err.Error()}
+			}
+			return err
+		}
+		if order.SalespersonID, order.Salesperson, err = salespersonSnapshot(tx, dto.CompanyID, dto.SalespersonID, dto.Salesperson, ""); err != nil {
+			var sp *errSalesperson
+			if errors.As(err, &sp) {
 				return &domain.ErrValidation{Message: err.Error()}
 			}
 			return err
@@ -143,7 +149,6 @@ func (r *SalesOrderRepository) Update(companyID, id string, dto *domain.UpdateDT
 			"additional_discount_value":  calc.AdditionalDiscountValue,
 			"additional_discount_amount": calc.AdditionalDiscountAmount,
 			"ship_from":                  strings.TrimSpace(dto.ShipFrom),
-			"salesperson":                strings.TrimSpace(dto.Salesperson),
 			"attachment_data":            dto.AttachmentData,
 			"attachment_name":            strings.TrimSpace(dto.AttachmentName),
 			"signature_data":             dto.SignatureData,
@@ -153,6 +158,19 @@ func (r *SalesOrderRepository) Update(companyID, id string, dto *domain.UpdateDT
 		}
 		if t := strings.TrimSpace(dto.Template); t != "" {
 			updates["template"] = t
+		}
+		// Same salesperson as before: its name snapshot stays as it was (an issued document never
+		// changes because the master was renamed); another one (or none) is snapshotted afresh.
+		if sid := derefStr(dto.SalespersonID); sid == "" || sid != derefStr(existing.SalespersonID) {
+			spID, spName, err := salespersonSnapshot(tx, companyID, dto.SalespersonID, dto.Salesperson, derefStr(existing.SalespersonID))
+			if err != nil {
+				var sp *errSalesperson
+				if errors.As(err, &sp) {
+					return &domain.ErrValidation{Message: err.Error()}
+				}
+				return err
+			}
+			updates["salesperson_id"], updates["salesperson"] = spID, spName
 		}
 		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
 		if err != nil {
@@ -224,6 +242,9 @@ func (r *SalesOrderRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginatio
 	}
 	if f.MitraID != "" {
 		q = q.Where("mitra_id = ?", f.MitraID)
+	}
+	if f.SalespersonID != "" {
+		q = q.Where("salesperson_id = ?", f.SalespersonID)
 	}
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)

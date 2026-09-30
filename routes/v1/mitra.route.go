@@ -12,8 +12,13 @@ import (
 // can write; delete stays Owner-only.
 func MitraRoutes(router fiber.Router, ctrl *controller.MitraController) {
 	router.Get("/", middlewares.RequirePermission("invoice-mitra-list"), ctrl.List)
+	router.Get("/next-code", middlewares.RequirePermission("invoice-mitra-create"), ctrl.NextCode)
 	router.Get("/:id", middlewares.RequirePermission("invoice-mitra-list"), ctrl.Get)
 	router.Post("/", middlewares.RequirePermission("invoice-mitra-create"), ctrl.Create)
+	router.Post("/import", middlewares.RequirePermission("invoice-mitra-create"), ctrl.Import)
+	router.Post("/bulk-activate", middlewares.RequirePermission("invoice-mitra-update"), ctrl.BulkActivate)
+	router.Post("/bulk-deactivate", middlewares.RequirePermission("invoice-mitra-update"), ctrl.BulkDeactivate)
+	router.Post("/bulk-delete", middlewares.RequirePermission("invoice-mitra-delete"), ctrl.BulkDelete)
 	router.Put("/:id", middlewares.RequirePermission("invoice-mitra-update"), ctrl.Update)
 	router.Delete("/:id", middlewares.RequirePermission("invoice-mitra-delete"), ctrl.Delete)
 }

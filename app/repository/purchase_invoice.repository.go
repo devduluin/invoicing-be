@@ -27,96 +27,138 @@ func NewPurchaseInvoiceRepository(db *gorm.DB) domain.IRepository {
 }
 
 func (r *PurchaseInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (*model.PurchaseInvoice, error) {
-	date, err := parsePurchaseInvoiceDate(dto.Date)
-	if err != nil {
+	if _, _, err := purchaseInvoiceDates(dto); err != nil {
 		return nil, err
 	}
-	dueDate, err := parseOptionalPurchaseInvoiceDate(dto.DueDate)
-	if err != nil {
-		return nil, err
-	}
-	if dueDate != nil && dueDate.Before(date) {
-		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
-	}
-
-	number := strings.TrimSpace(dto.Number)
-	if number != "" {
-		if exists, err := r.numberExists(dto.CompanyID, number, ""); err != nil {
-			return nil, err
-		} else if exists {
-			return nil, &domain.ErrNumberExists{Number: number}
-		}
-	}
-
 	var invoiceID string
-	err = r.db.Transaction(func(tx *gorm.DB) error {
-		if err := checkPurchaseInvoiceOrder(tx, dto.CompanyID, "", trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
-			return err
-		}
-		n := number
-		if n == "" {
-			gen, err := generatePurchaseInvoiceNumber(tx, dto.CompanyID, date)
-			if err != nil {
-				return err
-			}
-			n = gen
-		}
-
-		invoice := &model.PurchaseInvoice{
-			ID:                       uuid.NewString(),
-			CompanyID:                dto.CompanyID,
-			PurchaseOrderID:          trimPtr(dto.PurchaseOrderID),
-			MitraID:                  dto.MitraID,
-			Number:                   n,
-			Date:                     date,
-			DueDate:                  dueDate,
-			RefNo:                    strings.TrimSpace(dto.RefNo),
-			Notes:                    utils.SanitizeRichText(dto.Notes),
-			Subtotal:                 calc.Subtotal,
-			DiscountTotal:            calc.DiscountTotal,
-			TaxTotal:                 calc.TaxTotal,
-			GrandTotal:               calc.GrandTotal,
-			AdditionalDiscountType:   calc.AdditionalDiscountType,
-			AdditionalDiscountValue:  calc.AdditionalDiscountValue,
-			AdditionalDiscountAmount: calc.AdditionalDiscountAmount,
-			ShippingCost:             dto.ShippingCost,
-			ShipTo:                   strings.TrimSpace(dto.ShipTo),
-			AttachmentData:           dto.AttachmentData,
-			AttachmentName:           strings.TrimSpace(dto.AttachmentName),
-			SignatureData:            dto.SignatureData,
-			StampDuty:                dto.StampDuty,
-			Template:                 templateForDoc(tx, dto.CompanyID, "purchase_invoice", dto.Template),
-			CreatedBy:                actorID,
-			UpdatedBy:                actorID,
-		}
-		snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
-		if err != nil {
-			if errors.Is(err, errContactInvalid) {
-				return &domain.ErrValidation{Message: err.Error()}
-			}
-			return err
-		}
-		invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
-		if err := tx.Create(invoice).Error; err != nil {
-			return fmt.Errorf("create purchase invoice: %w", err)
-		}
-		lines := buildPurchaseInvoiceLines(calc.Lines, dto.CompanyID, invoice.ID)
-		if err := tx.Create(&lines).Error; err != nil {
-			return fmt.Errorf("create purchase invoice lines: %w", err)
-		}
-		lineTaxes := buildPurchaseInvoiceLineTaxes(lines, calc.Lines)
-		if len(lineTaxes) > 0 {
-			if err := tx.Create(&lineTaxes).Error; err != nil {
-				return fmt.Errorf("create purchase invoice line taxes: %w", err)
-			}
-		}
-		invoiceID = invoice.ID
-		return nil
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		invoiceID, err = createPurchaseInvoiceTx(tx, dto, calc, actorID)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return r.FindByID(dto.CompanyID, invoiceID)
+}
+
+// CreateMany — the import: every invoice in ONE transaction, so a file lands completely or not at all.
+// Returns the created invoices' ids and numbers, in order.
+func (r *PurchaseInvoiceRepository) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+	out := make([]domain.ImportCreated, 0, len(items))
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		for _, it := range items {
+			id, err := createPurchaseInvoiceTx(tx, it.DTO, it.Calc, actorID)
+			if err != nil {
+				return err
+			}
+			var number string
+			if err := tx.Model(&model.PurchaseInvoice{}).Where("id = ?", id).Pluck("number", &number).Error; err != nil {
+				return fmt.Errorf("read purchase invoice number: %w", err)
+			}
+			out = append(out, domain.ImportCreated{ID: id, Number: number})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// purchaseInvoiceDates parses the invoice and due dates; the due date can't be before the invoice date.
+func purchaseInvoiceDates(dto *domain.CreateDTO) (time.Time, *time.Time, error) {
+	date, err := parsePurchaseInvoiceDate(dto.Date)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	dueDate, err := parseOptionalPurchaseInvoiceDate(dto.DueDate)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	if dueDate != nil && dueDate.Before(date) {
+		return time.Time{}, nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+	}
+	return date, dueDate, nil
+}
+
+// createPurchaseInvoiceTx inserts one invoice with its lines and line taxes inside tx.
+func createPurchaseInvoiceTx(tx *gorm.DB, dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (string, error) {
+	date, dueDate, err := purchaseInvoiceDates(dto)
+	if err != nil {
+		return "", err
+	}
+
+	number := strings.TrimSpace(dto.Number)
+	if number != "" {
+		if exists, err := purchaseInvoiceNumberExists(tx, dto.CompanyID, number, ""); err != nil {
+			return "", err
+		} else if exists {
+			return "", &domain.ErrNumberExists{Number: number}
+		}
+	}
+
+	if err := checkPurchaseInvoiceOrder(tx, dto.CompanyID, "", trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
+		return "", err
+	}
+	n := number
+	if n == "" {
+		gen, err := generatePurchaseInvoiceNumber(tx, dto.CompanyID, date)
+		if err != nil {
+			return "", err
+		}
+		n = gen
+	}
+
+	invoice := &model.PurchaseInvoice{
+		ID:                       uuid.NewString(),
+		CompanyID:                dto.CompanyID,
+		PurchaseOrderID:          trimPtr(dto.PurchaseOrderID),
+		MitraID:                  dto.MitraID,
+		Number:                   n,
+		Date:                     date,
+		DueDate:                  dueDate,
+		RefNo:                    strings.TrimSpace(dto.RefNo),
+		Notes:                    utils.SanitizeRichText(dto.Notes),
+		Subtotal:                 calc.Subtotal,
+		DiscountTotal:            calc.DiscountTotal,
+		TaxTotal:                 calc.TaxTotal,
+		GrandTotal:               calc.GrandTotal,
+		AdditionalDiscountType:   calc.AdditionalDiscountType,
+		AdditionalDiscountValue:  calc.AdditionalDiscountValue,
+		AdditionalDiscountAmount: calc.AdditionalDiscountAmount,
+		ShippingCost:             dto.ShippingCost,
+		ShipTo:                   strings.TrimSpace(dto.ShipTo),
+		AttachmentData:           dto.AttachmentData,
+		AttachmentName:           strings.TrimSpace(dto.AttachmentName),
+		SignatureData:            dto.SignatureData,
+		StampDuty:                dto.StampDuty,
+		Template:                 templateForDoc(tx, dto.CompanyID, "purchase_invoice", dto.Template),
+		CreatedBy:                actorID,
+		UpdatedBy:                actorID,
+	}
+	snap, err := contactSnapshot(tx, dto.CompanyID, dto.MitraID, dto.ContactPersonID, "")
+	if err != nil {
+		if errors.Is(err, errContactInvalid) {
+			return "", &domain.ErrValidation{Message: err.Error()}
+		}
+		return "", err
+	}
+	invoice.ContactPersonID, invoice.ContactName, invoice.ContactPosition, invoice.ContactPhone, invoice.ContactEmail = snap.ID, snap.Name, snap.Position, snap.Phone, snap.Email
+	if err := tx.Create(invoice).Error; err != nil {
+		return "", fmt.Errorf("create purchase invoice: %w", err)
+	}
+	lines := buildPurchaseInvoiceLines(calc.Lines, dto.CompanyID, invoice.ID)
+	if err := tx.Create(&lines).Error; err != nil {
+		return "", fmt.Errorf("create purchase invoice lines: %w", err)
+	}
+	lineTaxes := buildPurchaseInvoiceLineTaxes(lines, calc.Lines)
+	if len(lineTaxes) > 0 {
+		if err := tx.Create(&lineTaxes).Error; err != nil {
+			return "", fmt.Errorf("create purchase invoice line taxes: %w", err)
+		}
+	}
+	return invoice.ID, nil
 }
 
 func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.UpdateDTO, calc *utils.LinesCalc, actorID string) (*model.PurchaseInvoice, error) {
@@ -350,7 +392,11 @@ func (r *PurchaseInvoiceRepository) TaxRates(companyID string, taxIDs []string) 
 }
 
 func (r *PurchaseInvoiceRepository) numberExists(companyID, number, exceptID string) (bool, error) {
-	q := r.db.Model(&model.PurchaseInvoice{}).Where("company_id = ? AND lower(number) = lower(?)", companyID, number)
+	return purchaseInvoiceNumberExists(r.db, companyID, number, exceptID)
+}
+
+func purchaseInvoiceNumberExists(db *gorm.DB, companyID, number, exceptID string) (bool, error) {
+	q := db.Model(&model.PurchaseInvoice{}).Where("company_id = ? AND lower(number) = lower(?)", companyID, number)
 	if exceptID != "" {
 		q = q.Where("id <> ?", exceptID)
 	}

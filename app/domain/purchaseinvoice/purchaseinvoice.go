@@ -31,7 +31,7 @@ type CreateDTO struct {
 	MitraID         string  `json:"mitra_id"          validate:"required,uuid4"`
 	Number          string  `json:"number"            validate:"omitempty,max=50"`
 	Date            string  `json:"date"              validate:"required"` // YYYY-MM-DD
-	DueDate         string  `json:"due_date"          validate:"omitempty"`
+	DueDate         string  `json:"due_date"          validate:"required"`
 	RefNo           string  `json:"ref_no"            validate:"omitempty,max=100"`
 	Notes           string  `json:"notes"             validate:"omitempty"`
 
@@ -53,6 +53,33 @@ type CreateDTO struct {
 	Lines []LineDTO `json:"lines" validate:"required,min=1,dive"`
 }
 
+// ImportRow is one invoice from the import file. Row is the spreadsheet row of the invoice's first
+// line, only used to point error messages at the right place.
+type ImportRow struct {
+	Row int `json:"row"`
+	CreateDTO
+}
+
+// ImportDTO — POST /purchase-invoices/import. Saved all-or-nothing.
+type ImportDTO struct {
+	Invoices []ImportRow `json:"invoices"`
+}
+
+// MaxImportInvoices caps one import file.
+const MaxImportInvoices = 500
+
+// ImportItem — one validated invoice with its computed totals, ready to insert.
+type ImportItem struct {
+	DTO  *CreateDTO
+	Calc *utils.LinesCalc
+}
+
+// ImportCreated — an invoice the import created.
+type ImportCreated struct {
+	ID     string `json:"id"`
+	Number string `json:"number"`
+}
+
 // UpdateDTO — a full replace: header fields + the complete new line set.
 // Rejected outright once the invoice is Confirmed or Cancelled.
 type UpdateDTO struct {
@@ -60,7 +87,7 @@ type UpdateDTO struct {
 	MitraID         string  `json:"mitra_id"          validate:"required,uuid4"`
 	Number          string  `json:"number"            validate:"omitempty,max=50"`
 	Date            string  `json:"date"              validate:"required"`
-	DueDate         string  `json:"due_date"          validate:"omitempty"`
+	DueDate         string  `json:"due_date"          validate:"required"`
 	RefNo           string  `json:"ref_no"            validate:"omitempty,max=100"`
 	Notes           string  `json:"notes"             validate:"omitempty"`
 
@@ -99,6 +126,8 @@ type Filter struct {
 
 type IRepository interface {
 	Create(dto *CreateDTO, calc *utils.LinesCalc, actorID string) (*model.PurchaseInvoice, error)
+	// CreateMany saves every invoice in one transaction (the import).
+	CreateMany(items []ImportItem, actorID string) ([]ImportCreated, error)
 	Update(companyID, id string, dto *UpdateDTO, calc *utils.LinesCalc, actorID string) (*model.PurchaseInvoice, error)
 	FindByID(companyID, id string) (*model.PurchaseInvoice, error)
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)
@@ -121,6 +150,8 @@ type IService interface {
 	// SetTemplate changes only the layout, in any status.
 	SetTemplate(companyID, actorID, id, template string) (*model.PurchaseInvoice, error)
 	Create(companyID, actorID string, dto *CreateDTO) (*model.PurchaseInvoice, error)
+	// Import creates the invoices of an import file (as drafts), all or nothing.
+	Import(companyID, actorID string, rows []ImportRow) ([]ImportCreated, error)
 	Update(companyID, actorID, id string, dto *UpdateDTO) (*model.PurchaseInvoice, error)
 	Get(companyID, id string) (*model.PurchaseInvoice, error)
 	List(f *Filter) (*utils.OffsetPaginationResult, error)

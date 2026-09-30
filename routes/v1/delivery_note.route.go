@@ -12,6 +12,7 @@ func DeliveryNoteRoutes(router fiber.Router, ctrl *controller.DeliveryNoteContro
 	g := router.Group("/delivery-notes")
 	g.Get("/", middlewares.RequirePermission("invoice-delivery-note-list"), ctrl.List)
 	g.Get("/next-number", middlewares.RequirePermission("invoice-delivery-note-create"), ctrl.PreviewNumber)
+	g.Post("/bulk-delete", middlewares.RequirePermission("invoice-delivery-note-delete"), ctrl.BulkDelete)
 	g.Get("/:id", middlewares.RequirePermission("invoice-delivery-note-list"), ctrl.Get)
 	g.Post("/", middlewares.RequirePermission("invoice-delivery-note-create"), ctrl.Create)
 	g.Put("/:id", middlewares.RequirePermission("invoice-delivery-note-update"), ctrl.Update)

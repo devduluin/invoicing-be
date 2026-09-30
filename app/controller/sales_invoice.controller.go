@@ -55,6 +55,7 @@ func (ctrl *SalesInvoiceController) List(c *fiber.Ctx) error {
 		Kind:          c.Query("kind"),
 		Search:        c.Query("search"),
 		MitraID:       c.Query("mitra_id"),
+		SalespersonID: c.Query("salesperson_id"),
 		Status:        c.Query("status"),
 		PaymentStatus: c.Query("payment_status"),
 		Overdue:       c.Query("overdue") == "true",
@@ -117,6 +118,42 @@ func (ctrl *SalesInvoiceController) Create(c *fiber.Ctx) error {
 	return utils.Created(c, row, "Invoice added")
 }
 
+// Import — POST /sales-invoices/import: the invoices of an import file (partner and taxes already
+// resolved to ids by the client), saved all or nothing as draft regular invoices. Every row is
+// validated first and all problems are returned together, each prefixed with its spreadsheet row.
+func (ctrl *SalesInvoiceController) Import(c *fiber.Ctx) error {
+	var body domain.ImportDTO
+	if err := c.BodyParser(&body); err != nil {
+		return utils.BadRequest(c, []string{"Invalid request body"})
+	}
+	if len(body.Invoices) == 0 {
+		return utils.ValidationFailed(c, []string{"The file has no invoices to import"})
+	}
+	if len(body.Invoices) > domain.MaxImportInvoices {
+		return utils.ValidationFailed(c, []string{fmt.Sprintf("At most %d invoices can be imported at once", domain.MaxImportInvoices)})
+	}
+	var msgs []string
+	for i := range body.Invoices {
+		r := &body.Invoices[i]
+		r.Kind = "invoice"
+		for _, m := range validation.Struct(&r.CreateDTO) {
+			msgs = append(msgs, fmt.Sprintf("Row %d: %s", r.Row, m))
+		}
+	}
+	if msgs != nil {
+		return utils.ValidationFailed(c, msgs)
+	}
+
+	created, err := ctrl.svc.Import(middlewares.GetCompanyID(c), middlewares.GetUserID(c), body.Invoices)
+	if err != nil {
+		return salesInvoiceErr(c, err)
+	}
+	for _, inv := range created {
+		ctrl.logInvoice(c, audit.ActionCreated, &model.SalesInvoice{ID: inv.ID, Number: inv.Number, Kind: model.SalesInvoiceKindInvoice}, fmt.Sprintf("Imported %s", inv.Number), nil)
+	}
+	return utils.Created(c, fiber.Map{"created": len(created), "invoices": created}, fmt.Sprintf("%d invoices imported", len(created)))
+}
+
 func (ctrl *SalesInvoiceController) Update(c *fiber.Ctx) error {
 	var dto domain.UpdateDTO
 	if err := c.BodyParser(&dto); err != nil {
@@ -144,41 +181,42 @@ func (ctrl *SalesInvoiceController) Update(c *fiber.Ctx) error {
 	return utils.Ok(c, row, "Invoice updated")
 }
 
-func (ctrl *SalesInvoiceController) Delete(c *fiber.Ctx) error {
-	before, _ := ctrl.svc.Get(middlewares.GetCompanyID(c), c.Params("id"))
-	if err := ctrl.svc.Delete(middlewares.GetCompanyID(c), c.Params("id")); err != nil {
-		return salesInvoiceErr(c, err)
+// deleteOne — the guarded delete + its audit entry, shared by Delete and BulkDelete.
+func (ctrl *SalesInvoiceController) deleteOne(c *fiber.Ctx, id string) error {
+	companyID := middlewares.GetCompanyID(c)
+	before, _ := ctrl.svc.Get(companyID, id)
+	if err := ctrl.svc.Delete(companyID, id); err != nil {
+		return err
 	}
 	if before != nil {
 		ctrl.logInvoice(c, audit.ActionDeleted, before, fmt.Sprintf("Deleted %s", before.Number), nil)
 	}
+	return nil
+}
+
+func (ctrl *SalesInvoiceController) Delete(c *fiber.Ctx) error {
+	if err := ctrl.deleteOne(c, c.Params("id")); err != nil {
+		return salesInvoiceErr(c, err)
+	}
 	return utils.Deleted(c, "Invoice deleted")
 }
 
-// POST /api/v1/sales-invoices/bulk-delete — {"ids": [...]}, up to 100 at once. Same guarded Delete
-// and audit entry per id as the single-row endpoint, just one HTTP round trip for the whole batch.
+// POST bulk-delete — {"ids": [...]}, up to 100 at once. Each id goes through the exact same guarded
+// delete as the single-row endpoint; a row that's still referenced fails on its own without blocking
+// the rest of the batch.
 func (ctrl *SalesInvoiceController) BulkDelete(c *fiber.Ctx) error {
 	ids, ok := parseBulkIDs(c)
 	if !ok {
 		return nil
 	}
-	companyID := middlewares.GetCompanyID(c)
-	return runBulkDelete(c, ids, func(id string) error {
-		before, _ := ctrl.svc.Get(companyID, id)
-		if err := ctrl.svc.Delete(companyID, id); err != nil {
-			return err
-		}
-		if before != nil {
-			ctrl.logInvoice(c, audit.ActionDeleted, before, fmt.Sprintf("Deleted %s", before.Number), nil)
-		}
-		return nil
-	})
+	return runBulk(c, ids, func(id string) error { return ctrl.deleteOne(c, id) }, "Bulk delete processed")
 }
 
-func (ctrl *SalesInvoiceController) Confirm(c *fiber.Ctx) error {
-	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
+// confirmOne / draftOne — the status change + its audit entry, shared by the single-row and bulk endpoints.
+func (ctrl *SalesInvoiceController) confirmOne(c *fiber.Ctx, id string) (*model.SalesInvoice, error) {
+	row, err := ctrl.svc.Confirm(middlewares.GetCompanyID(c), middlewares.GetUserID(c), id)
 	if err != nil {
-		return salesInvoiceErr(c, err)
+		return nil, err
 	}
 	// "Save & Confirm" is one action to the user: the trail shows the document being created, not a
 	// second, separate confirmation a moment later.
@@ -187,7 +225,39 @@ func (ctrl *SalesInvoiceController) Confirm(c *fiber.Ctx) error {
 			"status": {Before: string(model.SalesInvoiceStatusDraft), After: string(row.Status)},
 		})
 	}
+	return row, nil
+}
+
+func (ctrl *SalesInvoiceController) draftOne(c *fiber.Ctx, id string) (*model.SalesInvoice, error) {
+	row, err := ctrl.svc.BackToDraft(middlewares.GetCompanyID(c), middlewares.GetUserID(c), id)
+	if err != nil {
+		return nil, err
+	}
+	ctrl.logInvoice(c, audit.ActionStatusChanged, row, fmt.Sprintf("Moved %s back to draft", row.Number), map[string]audit.Change{
+		"status": {Before: string(model.SalesInvoiceStatusConfirmed), After: string(row.Status)},
+	})
+	return row, nil
+}
+
+func (ctrl *SalesInvoiceController) Confirm(c *fiber.Ctx) error {
+	row, err := ctrl.confirmOne(c, c.Params("id"))
+	if err != nil {
+		return salesInvoiceErr(c, err)
+	}
 	return utils.Ok(c, row, "Invoice confirmed")
+}
+
+// POST bulk-confirm — {"ids": [...]}: confirms each draft on its own (a non-draft or invalid one fails
+// alone, the rest go through).
+func (ctrl *SalesInvoiceController) BulkConfirm(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error {
+		_, err := ctrl.confirmOne(c, id)
+		return err
+	}, "Bulk confirm processed")
 }
 
 type setTemplateDTO struct {
@@ -210,14 +280,23 @@ func (ctrl *SalesInvoiceController) SetTemplate(c *fiber.Ctx) error {
 }
 
 func (ctrl *SalesInvoiceController) BackToDraft(c *fiber.Ctx) error {
-	row, err := ctrl.svc.BackToDraft(middlewares.GetCompanyID(c), middlewares.GetUserID(c), c.Params("id"))
+	row, err := ctrl.draftOne(c, c.Params("id"))
 	if err != nil {
 		return salesInvoiceErr(c, err)
 	}
-	ctrl.logInvoice(c, audit.ActionStatusChanged, row, fmt.Sprintf("Moved %s back to draft", row.Number), map[string]audit.Change{
-		"status": {Before: string(model.SalesInvoiceStatusConfirmed), After: string(row.Status)},
-	})
 	return utils.Ok(c, row, "Invoice moved back to draft")
+}
+
+// POST bulk-draft — {"ids": [...]}: moves each document back to draft on its own.
+func (ctrl *SalesInvoiceController) BulkBackToDraft(c *fiber.Ctx) error {
+	ids, ok := parseBulkIDs(c)
+	if !ok {
+		return nil
+	}
+	return runBulk(c, ids, func(id string) error {
+		_, err := ctrl.draftOne(c, id)
+		return err
+	}, "Bulk back to draft processed")
 }
 
 func (ctrl *SalesInvoiceController) Cancel(c *fiber.Ctx) error {

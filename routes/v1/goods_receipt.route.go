@@ -12,6 +12,7 @@ func GoodsReceiptRoutes(router fiber.Router, ctrl *controller.GoodsReceiptContro
 	g := router.Group("/goods-receipts")
 	g.Get("/", middlewares.RequirePermission("invoice-goods-receipt-list"), ctrl.List)
 	g.Get("/next-number", middlewares.RequirePermission("invoice-goods-receipt-create"), ctrl.PreviewNumber)
+	g.Post("/bulk-delete", middlewares.RequirePermission("invoice-goods-receipt-delete"), ctrl.BulkDelete)
 	g.Get("/:id", middlewares.RequirePermission("invoice-goods-receipt-list"), ctrl.Get)
 	g.Post("/", middlewares.RequirePermission("invoice-goods-receipt-create"), ctrl.Create)
 	g.Put("/:id", middlewares.RequirePermission("invoice-goods-receipt-update"), ctrl.Update)

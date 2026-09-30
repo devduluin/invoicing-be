@@ -199,6 +199,11 @@ func (s *ActivationService) activated(companyID string) bool {
 
 // CheckPartnerLimit — called before a partner is created.
 func (s *ActivationService) CheckPartnerLimit(companyID string) error {
+	return s.CheckPartnerCapacity(companyID, 1)
+}
+
+// CheckPartnerCapacity — called before `adding` partners are created at once (the import).
+func (s *ActivationService) CheckPartnerCapacity(companyID string, adding int) error {
 	limits, err := s.limitsFor(companyID)
 	if err != nil {
 		return err
@@ -207,7 +212,7 @@ func (s *ActivationService) CheckPartnerLimit(companyID string) error {
 	if err != nil {
 		return err
 	}
-	if int(n) >= limits.Partners {
+	if int(n)+adding > limits.Partners {
 		return &domain.ErrLimitReached{Resource: "partners", Limit: limits.Partners, Activated: s.activated(companyID)}
 	}
 	return nil
@@ -218,6 +223,11 @@ func (s *ActivationService) CheckPartnerLimit(companyID string) error {
 // view/record-payment never call this). Down Payment is a SalesInvoice row (Kind=down_payment), so
 // it is already included in the sales-invoice count below.
 func (s *ActivationService) CheckTransactionLimit(companyID string) error {
+	return s.CheckTransactionCapacity(companyID, 1)
+}
+
+// CheckTransactionCapacity — called before `adding` transactions are created at once (an import).
+func (s *ActivationService) CheckTransactionCapacity(companyID string, adding int) error {
 	limits, err := s.limitsFor(companyID)
 	if err != nil {
 		return err
@@ -241,7 +251,7 @@ func (s *ActivationService) CheckTransactionLimit(companyID string) error {
 		return err
 	}
 	total := int(salesInvoiceN + purchaseInvoiceN + salesOrderN + purchaseOrderN)
-	if total >= limits.TransactionsPerMonth {
+	if total+adding > limits.TransactionsPerMonth {
 		return &domain.ErrLimitReached{Resource: "transactions_per_month", Limit: limits.TransactionsPerMonth, Activated: s.activated(companyID)}
 	}
 	return nil

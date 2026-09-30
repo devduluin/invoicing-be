@@ -5,6 +5,10 @@ import contactdomain "duluin_invoice/app/domain/contactperson"
 // CreateMitraDTO is the create payload for a Mitra (PRD §8).
 type CreateMitraDTO struct {
 	CompanyID   string `json:"-"`
+	// Code is optional: blank = the next MTR-NNNN.
+	Code string `json:"code" validate:"omitempty,max=50"`
+	// LinkedCompanyCode — the partner's own Duluin Company Code, when it has one (optional).
+	LinkedCompanyCode string `json:"linked_company_code" validate:"omitempty,max=20"`
 	Type        string `json:"type" validate:"required,oneof=customer supplier both"`
 	Name        string `json:"name" validate:"required,max=255"`
 	ContactName string `json:"contact_name" validate:"required,max=255"`
@@ -20,8 +24,26 @@ type CreateMitraDTO struct {
 	ContactPerms contactdomain.Perms `json:"-"`
 }
 
+// ImportMitraRow is one partner from the import file. Row is the spreadsheet row of the partner's
+// first line, only used to point error messages at the right place.
+type ImportMitraRow struct {
+	Row int `json:"row"`
+	CreateMitraDTO
+}
+
+// ImportMitraDTO — POST /mitra/import. Saved all-or-nothing.
+type ImportMitraDTO struct {
+	Partners []ImportMitraRow `json:"partners"`
+}
+
+// MaxImportPartners caps one import file.
+const MaxImportPartners = 500
+
 // UpdateMitraDTO — all fields optional; only provided keys are applied.
 type UpdateMitraDTO struct {
+	Code string `json:"code" validate:"omitempty,max=50"`
+	// LinkedCompanyCode: nil = leave the link alone, "" = unlink, a code = link to that company.
+	LinkedCompanyCode *string `json:"linked_company_code" validate:"omitempty,max=20"`
 	Type        string  `json:"type" validate:"omitempty,oneof=customer supplier both"`
 	Name        string  `json:"name" validate:"omitempty,max=255"`
 	ContactName string  `json:"contact_name" validate:"omitempty,max=255"`

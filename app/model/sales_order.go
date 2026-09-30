@@ -44,6 +44,8 @@ type SalesOrder struct {
 	// deliberately simple fields.
 	ShipFrom    string `gorm:"type:varchar(150)" json:"ship_from,omitempty"`
 	Salesperson string `gorm:"type:varchar(120)" json:"salesperson,omitempty"`
+	// SalespersonID — the salesperson master record; Salesperson above is its name as of saving.
+	SalespersonID *string `gorm:"type:uuid" json:"salesperson_id,omitempty"`
 
 	// Optional supporting file, stored as a data: URI (same convention as
 	// CompanyService.processLogo / LogoUpload) — never selected in list

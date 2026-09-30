@@ -41,6 +41,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	accountRepo := repository.NewAccountRepository(db)
 	taxRepo := repository.NewTaxRepository(db)
 	unitRepo := repository.NewUnitRepository(db)
+	salespersonRepo := repository.NewSalespersonRepository(db)
 	journalBookRepo := repository.NewJournalBookRepository(db)
 	journalRepo := repository.NewJournalRepository(db)
 	reportRepo := repository.NewReportRepository(db)
@@ -83,6 +84,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	accountSvc := service.NewAccountService(accountRepo)
 	taxSvc := service.NewTaxService(taxRepo)
 	unitSvc := service.NewUnitService(unitRepo)
+	salespersonSvc := service.NewSalespersonService(salespersonRepo)
 	journalBookSvc := service.NewJournalBookService(journalBookRepo)
 	journalSvc := service.NewJournalService(journalRepo)
 	reportSvc := service.NewReportService(reportRepo)
@@ -110,6 +112,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	accountCtrl := controller.NewAccountController(accountSvc)
 	taxCtrl := controller.NewTaxController(taxSvc)
 	unitCtrl := controller.NewUnitController(unitSvc)
+	salespersonCtrl := controller.NewSalespersonController(salespersonSvc, auditSvc)
 	journalBookCtrl := controller.NewJournalBookController(journalBookSvc)
 	journalCtrl := controller.NewJournalController(journalSvc)
 	reportCtrl := controller.NewReportController(reportSvc)
@@ -159,6 +162,13 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	auditWrites("/bank-accounts", controller.AuditSpec{Module: audit.ModuleMasterData, Entity: "bank_account", Label: "bank account", Lookup: controller.LookupBy(bankAccountSvc.Get)})
 	auditWrites("/taxes", controller.AuditSpec{Module: audit.ModuleMasterData, Entity: "tax", Label: "tax", Lookup: controller.LookupBy(taxSvc.Get)})
 	auditWrites("/units", controller.AuditSpec{Module: audit.ModuleMasterData, Entity: "unit", Label: "unit", Lookup: controller.LookupBy(unitSvc.Get)})
+	auditWrites("/salespersons", controller.AuditSpec{
+		Module: audit.ModuleMasterData, Entity: "salesperson", Label: "salesperson", Lookup: controller.LookupBy(salespersonSvc.Get),
+		// bulk-* and from-members act on many at once: the controller records one entry per salesperson
+		Match: func(_, path string) bool {
+			return !strings.Contains(path, "/bulk-") && !strings.HasSuffix(path, "/from-members")
+		},
+	})
 	auditWrites("/document-templates", controller.AuditSpec{Module: audit.ModuleSettings, Entity: "document_template", Label: "default template of"})
 	auditWrites("/roles", controller.AuditSpec{Module: audit.ModuleRoleManagement, Entity: "role", Label: "role", Lookup: controller.RoleAuditLookup(roleSvc)})
 	auditWrites("/mitra", controller.AuditSpec{
@@ -189,6 +199,7 @@ func RegisterRoutes(router fiber.Router, db *gorm.DB) {
 	AccountRoutes(business, accountCtrl)
 	TaxRoutes(business, taxCtrl)
 	UnitRoutes(business, unitCtrl)
+	SalespersonRoutes(business, salespersonCtrl)
 	DocumentTemplateRoutes(business, documentTemplateCtrl)
 	ConnectedDocumentRoutes(business, connectedDocumentCtrl)
 	DocumentConfigurationRoutes(business, documentConfigCtrl)

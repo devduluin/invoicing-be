@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	contactdomain "duluin_invoice/app/domain/contactperson"
@@ -17,13 +18,13 @@ import (
 
 // mitraListColumns — fields the MasterTable may show / sort by.
 var mitraListColumns = []string{
-	"type", "name", "contact_name", "email", "phone", "npwp", "address",
+	"code", "linked_company_code", "type", "name", "contact_name", "email", "phone", "npwp", "address",
 	"is_active", "created_at", "updated_at",
 }
 
 // mitraColumns is the explicit projection for mitra reads (avoids SELECT *).
 var mitraColumns = []string{
-	"id", "company_id", "type", "name", "contact_name", "email", "phone", "npwp", "address",
+	"id", "company_id", "code", "linked_company_id", "linked_company_code", "type", "name", "contact_name", "email", "phone", "npwp", "address",
 	"is_active", "created_at", "created_by", "updated_at", "updated_by",
 }
 
@@ -37,57 +38,108 @@ func NewMitraRepository(db *gorm.DB) domain.IMitraRepository {
 
 // Create — 1 INSERT + 1 SELECT (re-read for the response).
 func (r *MitraRepository) Create(dto *domain.CreateMitraDTO, actorID string) (*model.Mitra, error) {
-	mitra := &model.Mitra{
-		ID:          uuid.New().String(),
-		CompanyID:   dto.CompanyID,
-		Type:        model.MitraType(dto.Type),
-		Name:        dto.Name,
-		ContactName: dto.ContactName,
-		Email:       dto.Email,
-		Phone:       dto.Phone,
-		Npwp:        dto.Npwp,
-		Address:     dto.Address,
-		IsActive:    utils.BoolInt(true),
-		CreatedBy:   actorID,
-		UpdatedBy:   actorID,
-	}
-	if dto.IsActive != nil {
-		mitra.IsActive = utils.BoolInt(*dto.IsActive)
-	}
+	var mitra *model.Mitra
 	// The partner and its contact persons are saved together or not at all.
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(mitra).Error; err != nil {
-			return fmt.Errorf("create mitra: %w", err)
-		}
-		// The PIC becomes the partner's first contact person, automatically.
-		pn, pe, pp := picName(dto.ContactName, dto.Name), strings.TrimSpace(dto.Email), strings.TrimSpace(dto.Phone)
-		if err := createPICContact(tx, dto.CompanyID, mitra.ID, actorID, pn, pe, pp); err != nil {
-			return err
-		}
-		// A contact the user also typed by hand that equals the PIC is the same person: skip it.
-		extra := make([]contactdomain.SyncInput, 0, len(dto.ContactPersons))
-		for _, c := range dto.ContactPersons {
-			if strings.EqualFold(strings.TrimSpace(c.Name), pn) && strings.EqualFold(strings.TrimSpace(c.Email), pe) && strings.TrimSpace(c.Phone) == pp {
-				continue
-			}
-			extra = append(extra, c)
-		}
-		// Creating a partner already needs invoice-mitra-create; extra contacts need the contact permission.
-		// (Created one by one, not through syncContacts, which would treat the PIC row as "missing".)
-		for _, c := range extra {
-			if !dto.ContactPerms.Create {
-				return &contactdomain.ErrForbidden{Action: "add"}
-			}
-			if _, err := createContact(tx, dto.CompanyID, mitra.ID, actorID, contactdomain.Input{Name: c.Name, Position: c.Position, Phone: c.Phone, Email: c.Email}); err != nil {
-				return err
-			}
-		}
-		return nil
+		var err error
+		mitra, err = createMitraTx(tx, dto, actorID)
+		return err
 	})
 	if err != nil {
 		return nil, mapContactErr(err)
 	}
 	return r.FindByID(dto.CompanyID, mitra.ID)
+}
+
+// CreateMany — the import: every partner (with its contacts) in ONE transaction, so a file either
+// lands completely or not at all. A failing partner is named in the error.
+func (r *MitraRepository) CreateMany(dtos []*domain.CreateMitraDTO, actorID string) ([]*model.Mitra, error) {
+	out := make([]*model.Mitra, 0, len(dtos))
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		for _, dto := range dtos {
+			m, err := createMitraTx(tx, dto, actorID)
+			if err != nil {
+				var dup *domain.ErrCodeExists
+				var linked *domain.ErrCompanyLinked
+				var invalid *domain.ErrValidation
+				if mapped := mapContactErr(err); mapped != err || errors.As(err, &dup) || errors.As(err, &linked) || errors.As(err, &invalid) {
+					return &domain.ErrValidation{Message: dto.Name + ": " + mapped.Error()}
+				}
+				return err
+			}
+			out = append(out, m)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// createMitraTx inserts one partner, its PIC contact and its extra contacts inside tx.
+func createMitraTx(tx *gorm.DB, dto *domain.CreateMitraDTO, actorID string) (*model.Mitra, error) {
+	code, err := claimMitraCode(tx, dto.CompanyID, dto.Code, "")
+	if err != nil {
+		return nil, err
+	}
+	linkedID, linkedCode, err := resolveLinkedCompany(tx, dto.CompanyID, dto.LinkedCompanyCode, "")
+	if err != nil {
+		return nil, err
+	}
+	mitra := &model.Mitra{
+		ID:                uuid.New().String(),
+		CompanyID:         dto.CompanyID,
+		Code:              code,
+		LinkedCompanyID:   linkedID,
+		LinkedCompanyCode: linkedCode,
+		Type:              model.MitraType(dto.Type),
+		Name:              dto.Name,
+		ContactName:       dto.ContactName,
+		Email:             dto.Email,
+		Phone:             dto.Phone,
+		Npwp:              dto.Npwp,
+		Address:           dto.Address,
+		IsActive:          utils.BoolInt(true),
+		CreatedBy:         actorID,
+		UpdatedBy:         actorID,
+	}
+	if dto.IsActive != nil {
+		mitra.IsActive = utils.BoolInt(*dto.IsActive)
+	}
+	if err := tx.Create(mitra).Error; err != nil {
+		if uniqueViolationOn(err, "uq_mitra_company_linked_active") {
+			return nil, &domain.ErrCompanyLinked{Code: linkedCode}
+		}
+		if isUniqueViolation(err) {
+			return nil, &domain.ErrCodeExists{Code: code}
+		}
+		return nil, fmt.Errorf("create mitra: %w", err)
+	}
+	// The PIC becomes the partner's first contact person, automatically.
+	pn, pe, pp := picName(dto.ContactName, dto.Name), strings.TrimSpace(dto.Email), strings.TrimSpace(dto.Phone)
+	if err := createPICContact(tx, dto.CompanyID, mitra.ID, actorID, pn, pe, pp); err != nil {
+		return nil, err
+	}
+	// A contact the user also typed by hand that equals the PIC is the same person: skip it.
+	extra := make([]contactdomain.SyncInput, 0, len(dto.ContactPersons))
+	for _, c := range dto.ContactPersons {
+		if strings.EqualFold(strings.TrimSpace(c.Name), pn) && strings.EqualFold(strings.TrimSpace(c.Email), pe) && strings.TrimSpace(c.Phone) == pp {
+			continue
+		}
+		extra = append(extra, c)
+	}
+	// Creating a partner already needs invoice-mitra-create; extra contacts need the contact permission.
+	// (Created one by one, not through syncContacts, which would treat the PIC row as "missing".)
+	for _, c := range extra {
+		if !dto.ContactPerms.Create {
+			return nil, &contactdomain.ErrForbidden{Action: "add"}
+		}
+		if _, err := createContact(tx, dto.CompanyID, mitra.ID, actorID, contactdomain.Input{Name: c.Name, Position: c.Position, Phone: c.Phone, Email: c.Email}); err != nil {
+			return nil, err
+		}
+	}
+	return mitra, nil
 }
 
 // Update — 1 SELECT (existence) + 1 UPDATE + 1 SELECT (re-read).
@@ -99,6 +151,21 @@ func (r *MitraRepository) Update(companyID, id string, dto *domain.UpdateMitraDT
 
 	updates := mitraUpdateMap(dto, actorID)
 	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if c := strings.TrimSpace(dto.Code); c != "" && c != before.Code {
+			code, err := claimMitraCode(tx, companyID, c, id)
+			if err != nil {
+				return err
+			}
+			updates["code"] = code
+		}
+		if dto.LinkedCompanyCode != nil && !strings.EqualFold(strings.TrimSpace(*dto.LinkedCompanyCode), before.LinkedCompanyCode) {
+			linkedID, linkedCode, err := resolveLinkedCompany(tx, companyID, *dto.LinkedCompanyCode, id)
+			if err != nil {
+				return err
+			}
+			updates["linked_company_id"] = linkedID
+			updates["linked_company_code"] = linkedCode
+		}
 		if dto.ContactPersons != nil {
 			if err := lockMitra(tx, companyID, id); err != nil {
 				return err
@@ -107,6 +174,12 @@ func (r *MitraRepository) Update(companyID, id string, dto *domain.UpdateMitraDT
 		if err := tx.Model(&model.Mitra{}).
 			Where("id = ? AND company_id = ?", id, companyID).
 			Updates(updates).Error; err != nil {
+			if uniqueViolationOn(err, "uq_mitra_company_linked_active") {
+				return &domain.ErrCompanyLinked{Code: fmt.Sprint(updates["linked_company_code"])}
+			}
+			if isUniqueViolation(err) {
+				return &domain.ErrCodeExists{Code: fmt.Sprint(updates["code"])}
+			}
 			return fmt.Errorf("update mitra %s: %w", id, err)
 		}
 		if dto.ContactPersons != nil {
@@ -185,7 +258,7 @@ func (r *MitraRepository) mitraFilterQuery(filter *domain.MitraFilter) *gorm.DB 
 	query := r.db.Model(&model.Mitra{}).Where("company_id = ?", filter.CompanyID)
 	if filter.Search != "" {
 		s := "%" + strings.ToLower(filter.Search) + "%"
-		query = query.Where("LOWER(name) LIKE ? OR LOWER(email) LIKE ?", s, s)
+		query = query.Where("LOWER(name) LIKE ? OR LOWER(email) LIKE ? OR LOWER(code) LIKE ?", s, s, s)
 	}
 	if filter.Type != "" {
 		// A partner marked "both" is valid on either side, so a caller asking for "customer" or
@@ -242,6 +315,100 @@ func mapContactErr(err error) error {
 	}
 	return err
 }
+
+// ── linked Duluin company ──────────────────────────────────────────────────────────────────────
+
+// resolveLinkedCompany turns a Duluin Company Code into the company to link: "" = no link. The company
+// must be an active Duluin company other than the caller's own, and not already linked to another of
+// the caller's partners (exceptID = the partner being edited).
+func resolveLinkedCompany(tx *gorm.DB, companyID, rawCode, exceptID string) (*string, string, error) {
+	code := strings.TrimSpace(rawCode)
+	if code == "" {
+		return nil, "", nil
+	}
+	var c model.Company
+	err := tx.Select("id", "code").
+		Where("lower(code) = lower(?) AND onboarding_status = ?", code, model.OnboardingActive).
+		First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && c.ID == companyID) {
+		return nil, "", &domain.ErrValidation{Message: fmt.Sprintf("Duluin Company Code %s not found", code)}
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("find linked company: %w", err)
+	}
+	var other model.Mitra
+	q := tx.Select("id", "code", "name").Where("company_id = ? AND linked_company_id = ?", companyID, c.ID)
+	if exceptID != "" {
+		q = q.Where("id <> ?", exceptID)
+	}
+	err = q.First(&other).Error
+	if err == nil {
+		label := other.Name
+		if other.Code != "" {
+			label = other.Code + " · " + other.Name
+		}
+		return nil, "", &domain.ErrCompanyLinked{Code: c.Code, Partner: label}
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, "", fmt.Errorf("check linked company: %w", err)
+	}
+	id := c.ID
+	return &id, c.Code, nil
+}
+
+// uniqueViolationOn — a unique violation of that particular index.
+func uniqueViolationOn(err error, index string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == index
+}
+
+// ── partner codes ──────────────────────────────────────────────────────────────────────────────
+
+const mitraCodePrefix = "MTR-"
+
+// NextCode previews the code a new partner would get now (not reserved: another create may take it).
+func (r *MitraRepository) NextCode(companyID string) (string, error) {
+	return nextMitraCode(r.db, companyID)
+}
+
+// claimMitraCode returns the code to store: the requested one (trimmed) once checked free among the
+// company's active partners (exceptID = the partner being edited), or the next MTR-NNNN when blank.
+// Generation takes a per-company transaction lock so two concurrent creates can't get the same code.
+func claimMitraCode(tx *gorm.DB, companyID, requested, exceptID string) (string, error) {
+	code := strings.TrimSpace(requested)
+	if code == "" {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", "mitra_code:"+companyID).Error; err != nil {
+			return "", fmt.Errorf("lock partner codes: %w", err)
+		}
+		return nextMitraCode(tx, companyID)
+	}
+	q := tx.Model(&model.Mitra{}).Where("company_id = ? AND lower(code) = lower(?)", companyID, code)
+	if exceptID != "" {
+		q = q.Where("id <> ?", exceptID)
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return "", fmt.Errorf("check partner code: %w", err)
+	}
+	if n > 0 {
+		return "", &domain.ErrCodeExists{Code: code}
+	}
+	return code, nil
+}
+
+// nextMitraCode — MTR-<max+1>, zero-padded to 4 digits. Deleted partners count too, so a generated
+// code is never handed out twice.
+func nextMitraCode(db *gorm.DB, companyID string) (string, error) {
+	var codes []string
+	if err := db.Unscoped().Model(&model.Mitra{}).
+		Where("company_id = ? AND upper(code) LIKE ?", companyID, mitraCodePrefix+"%").
+		Pluck("code", &codes).Error; err != nil {
+		return "", fmt.Errorf("scan partner codes: %w", err)
+	}
+	return fmt.Sprintf("%s%04d", mitraCodePrefix, nextMitraSequence(codes)), nil
+}
+
+func nextMitraSequence(codes []string) int { return nextPrefixedSequence(mitraCodePrefix, codes) }
 
 // CountActive — how many partners this company has (soft-deleted rows excluded by GORM by
 // default). Used by the activation milestone and the Free-tier partner limit.

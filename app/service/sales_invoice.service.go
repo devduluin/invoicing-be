@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 // activation flip right away.
 type transactionLimiter interface {
 	CheckTransactionLimit(companyID string) error
+	CheckTransactionCapacity(companyID string, adding int) error
 	Recompute(companyID string)
 }
 
@@ -47,6 +50,56 @@ func (s *SalesInvoiceService) Create(companyID, actorID string, dto *domain.Crea
 	}
 	s.activation.Recompute(companyID)
 	return row, nil
+}
+
+// Import validates every invoice first (partner, lines, taxes, totals) and names the failing one by
+// its spreadsheet row; the Free-tier transactions/month cap is checked for the whole file; then all
+// invoices are saved in one transaction. Imported invoices are regular invoices, saved as drafts.
+func (s *SalesInvoiceService) Import(companyID, actorID string, rows []domain.ImportRow) ([]domain.ImportCreated, error) {
+	items := make([]domain.ImportItem, 0, len(rows))
+	seen := make(map[string]int, len(rows))
+	for i := range rows {
+		r := &rows[i]
+		dto := &r.CreateDTO
+		dto.CompanyID = companyID
+		dto.Kind = string(model.SalesInvoiceKindInvoice)
+		dto.SalesOrderID, dto.LinkedInvoiceID, dto.ContactPersonID = nil, nil, nil
+		dto.AttachmentData, dto.AttachmentName, dto.SignatureData = "", "", ""
+		rowErr := func(msg string) error {
+			return &domain.ErrValidation{Message: fmt.Sprintf("Row %d: %s", r.Row, msg)}
+		}
+		if n := strings.ToLower(strings.TrimSpace(dto.Number)); n != "" {
+			if first, dup := seen[n]; dup {
+				return nil, rowErr(fmt.Sprintf("invoice no. %s is also used on row %d", dto.Number, first))
+			}
+			seen[n] = r.Row
+		}
+		if err := s.checkMitra(companyID, dto.MitraID); err != nil {
+			return nil, rowErr(err.Error())
+		}
+		calc, err := s.calc(companyID, dto.Lines, dto.AdditionalDiscountType, dto.AdditionalDiscountValue, dto.ShippingCost)
+		if err != nil {
+			return nil, rowErr(err.Error())
+		}
+		items = append(items, domain.ImportItem{DTO: dto, Calc: calc})
+	}
+	if err := s.activation.CheckTransactionCapacity(companyID, len(items)); err != nil {
+		return nil, err
+	}
+	created, err := s.repo.CreateMany(items, actorID)
+	if err != nil {
+		var dup *domain.ErrNumberExists
+		if errors.As(err, &dup) {
+			for _, r := range rows {
+				if strings.EqualFold(strings.TrimSpace(r.Number), dup.Number) {
+					return nil, &domain.ErrValidation{Message: fmt.Sprintf("Row %d: %s", r.Row, dup.Error())}
+				}
+			}
+		}
+		return nil, err
+	}
+	s.activation.Recompute(companyID)
+	return created, nil
 }
 
 func (s *SalesInvoiceService) Update(companyID, actorID, id string, dto *domain.UpdateDTO) (*model.SalesInvoice, error) {

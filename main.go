@@ -39,6 +39,14 @@ func main() {
 		log.Fatalf("Schema migration failed: %v", err)
 	}
 
+	if err := repository.BackfillMitraCodesOnce(database.DB); err != nil {
+		log.Printf("⚠️  Partner code backfill warning: %v", err)
+	}
+
+	if err := repository.BackfillSalespersonsOnce(database.DB); err != nil {
+		log.Printf("⚠️  Salesperson backfill warning: %v", err)
+	}
+
 	if err := repository.BackfillUnitsOnce(database.DB); err != nil {
 		log.Printf("⚠️  Unit backfill warning: %v", err)
 	}

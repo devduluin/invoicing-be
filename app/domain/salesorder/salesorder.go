@@ -38,13 +38,15 @@ type CreateDTO struct {
 
 	// Free-text meta, attachment, and signature/stamp-duty — see
 	// app/model/sales_order.go.
-	ShipFrom       string `json:"ship_from"       validate:"omitempty,max=150"`
-	Salesperson    string `json:"salesperson"     validate:"omitempty,max=120"`
-	AttachmentData string `json:"attachment_data" validate:"omitempty"`
-	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
-	SignatureData  string `json:"signature_data"  validate:"omitempty"`
-	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
-	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
+	ShipFrom    string `json:"ship_from"       validate:"omitempty,max=150"`
+	Salesperson string `json:"salesperson"     validate:"omitempty,max=120"`
+	// SalespersonID — a salesperson of the company; the server snapshots its name into Salesperson.
+	SalespersonID  *string `json:"salesperson_id" validate:"omitempty,uuid4"`
+	AttachmentData string  `json:"attachment_data" validate:"omitempty"`
+	AttachmentName string  `json:"attachment_name" validate:"omitempty,max=255"`
+	SignatureData  string  `json:"signature_data"  validate:"omitempty"`
+	StampDuty      bool    `json:"stamp_duty"      validate:"omitempty"`
+	Template       string  `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
@@ -63,13 +65,15 @@ type UpdateDTO struct {
 	AdditionalDiscountType  string  `json:"additional_discount_type"  validate:"omitempty,oneof=percent amount"`
 	AdditionalDiscountValue float64 `json:"additional_discount_value" validate:"omitempty,gte=0"`
 
-	ShipFrom       string `json:"ship_from"       validate:"omitempty,max=150"`
-	Salesperson    string `json:"salesperson"     validate:"omitempty,max=120"`
-	AttachmentData string `json:"attachment_data" validate:"omitempty"`
-	AttachmentName string `json:"attachment_name" validate:"omitempty,max=255"`
-	SignatureData  string `json:"signature_data"  validate:"omitempty"`
-	StampDuty      bool   `json:"stamp_duty"      validate:"omitempty"`
-	Template       string `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
+	ShipFrom    string `json:"ship_from"       validate:"omitempty,max=150"`
+	Salesperson string `json:"salesperson"     validate:"omitempty,max=120"`
+	// SalespersonID — a salesperson of the company; the server snapshots its name into Salesperson.
+	SalespersonID  *string `json:"salesperson_id" validate:"omitempty,uuid4"`
+	AttachmentData string  `json:"attachment_data" validate:"omitempty"`
+	AttachmentName string  `json:"attachment_name" validate:"omitempty,max=255"`
+	SignatureData  string  `json:"signature_data"  validate:"omitempty"`
+	StampDuty      bool    `json:"stamp_duty"      validate:"omitempty"`
+	Template       string  `json:"template" validate:"omitempty,oneof=template_1 template_2 template_3 template_4 template_5 template_6 template_7"`
 	// ContactPersonID — a contact of THIS partner; the server copies its details onto the document.
 	ContactPersonID *string `json:"contact_person_id" validate:"omitempty,uuid4"`
 
@@ -81,12 +85,14 @@ type Filter struct {
 	CompanyID string
 	Search    string
 	MitraID   string
-	Status    string
-	Page      int
-	PageSize  int
-	Sort      string
-	Order     string
-	Fields    []string
+	// SalespersonID narrows the list to one salesperson's orders.
+	SalespersonID string
+	Status        string
+	Page          int
+	PageSize      int
+	Sort          string
+	Order         string
+	Fields        []string
 }
 
 // TaxInfo — the two fields calcLines needs from a referenced tax.
