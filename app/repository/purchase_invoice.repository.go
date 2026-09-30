@@ -17,7 +17,7 @@ import (
 
 // purchaseInvoiceListColumns — fields the MasterTable may show / sort by.
 var purchaseInvoiceListColumns = []string{
-	"number", "date", "due_date", "status", "payment_status", "mitra_id", "grand_total", "paid_amount", "created_at",
+	"number", "date", "due_date", "status", "mitra_id", "grand_total", "paid_amount", "created_at", "created_by", "purchase_order_id", "contact_name", "updated_by",
 }
 
 type PurchaseInvoiceRepository struct{ db *gorm.DB }
@@ -326,6 +326,15 @@ func (r *PurchaseInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 		ValidColumns:         purchaseInvoiceListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
+			{Name: "PurchaseOrderRel", Columns: []string{"id", "number"}},
+		},
+		KeepColumns: []string{"mitra_id", "purchase_order_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

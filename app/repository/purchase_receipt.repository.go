@@ -16,7 +16,7 @@ import (
 	"duluin_invoice/utils"
 )
 
-var purchaseReceiptListColumns = []string{"number", "date", "mitra_id", "amount", "payment_method", "created_at"}
+var purchaseReceiptListColumns = []string{"number", "date", "mitra_id", "amount", "payment_method", "created_at", "created_by", "bank_account_id", "updated_by"}
 
 type PurchaseReceiptRepository struct{ db *gorm.DB }
 
@@ -138,6 +138,15 @@ func (r *PurchaseReceiptRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 		ValidColumns:         purchaseReceiptListColumns,
 		Preloads:             []string{"Allocations"},
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
+			{Name: "BankAccountRel", Columns: []string{"id", "bank_name", "account_number"}},
+		},
+		KeepColumns: []string{"mitra_id", "bank_account_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

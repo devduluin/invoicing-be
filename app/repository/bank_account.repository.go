@@ -23,6 +23,7 @@ var bankAccountColumns = []string{
 var bankAccountListColumns = []string{
 	"bank_name", "bank_code", "account_number", "account_holder", "branch",
 	"is_primary", "is_active", "created_at", "updated_at",
+	"created_by", "updated_by",
 }
 
 type BankAccountRepository struct{ db *gorm.DB }
@@ -116,6 +117,11 @@ func (r *BankAccountRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginati
 		Select:               f.Fields,
 		ValidColumns:         bankAccountListColumns,
 		PreserveAssociations: true,
+		KeepColumns:          []string{"created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

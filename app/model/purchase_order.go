@@ -20,9 +20,11 @@ const (
 // totals. It does not touch accounts/journal entries; that happens later
 // when a Purchase Invoice ("Bill") reads a confirmed order.
 type PurchaseOrder struct {
-	ID            string              `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID     string              `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID       string              `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	ID        string `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID string `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID   string `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra         *Mitra              `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
 	Number        string              `gorm:"type:varchar(50);not null"  json:"number"`
 	Date          time.Time           `gorm:"type:date;not null"         json:"date"`
 	RefNo         string              `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
@@ -73,6 +75,8 @@ type PurchaseOrder struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel *Mitra `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
 }
 
 func (PurchaseOrder) TableName() string { return "purchase_orders" }

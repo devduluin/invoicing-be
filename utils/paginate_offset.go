@@ -26,6 +26,29 @@ type OffsetPaginationOptions struct {
 	ValidColumns         []string
 	PreserveAssociations bool // true → fetch into the model struct then JSON-encode (keeps preloads/BoolInt)
 	SelectPrefix         string
+	// PreloadRelations — like Preloads, but only the listed columns of the related row, and soft-deleted
+	// related rows included (a document keeps showing a partner that was deleted since).
+	PreloadRelations []PreloadRelation
+	// KeepColumns are always selected, even when the caller narrows the columns (?fields=) — the
+	// foreign keys PreloadRelations / ExternalJoins need to resolve.
+	KeepColumns []string
+	// ExternalJoins fill a row field from data a GORM relation can't reach (another table keyed by a
+	// non-FK value, or another service): one batched lookup per page, never one per row.
+	ExternalJoins []ExternalJoin
+}
+
+// PreloadRelation — a GORM association to preload with a narrow column list.
+type PreloadRelation struct {
+	Name    string   // association field, e.g. "Mitra"
+	Columns []string // e.g. {"id", "code", "name"}; empty = all
+}
+
+// ExternalJoin puts Resolver(distinct values of row[Key])[value] into row[As]. A resolver error leaves
+// the field empty rather than failing the list.
+type ExternalJoin struct {
+	Key      string // row field holding the lookup value, e.g. "created_by"
+	As       string // field the resolved value is written to, e.g. "created_by_rel"
+	Resolver func(values []string) (map[string]interface{}, error)
 }
 
 type OffsetPaginationMeta struct {
@@ -60,6 +83,16 @@ func GetPaginatedDataOffset(db *gorm.DB, options OffsetPaginationOptions) (*Offs
 		}
 		db = db.Preload(preload)
 	}
+	for _, rel := range options.PreloadRelations {
+		cols := rel.Columns
+		db = db.Preload(rel.Name, func(tx *gorm.DB) *gorm.DB {
+			tx = tx.Unscoped()
+			if len(cols) > 0 {
+				tx = tx.Select(cols)
+			}
+			return tx
+		})
+	}
 
 	safePage := normalizePositive(options.Page, 1)
 	safeLimit := normalizePositive(options.Limit, 10)
@@ -67,7 +100,13 @@ func GetPaginatedDataOffset(db *gorm.DB, options OffsetPaginationOptions) (*Offs
 
 	selectedColumns := sanitizeAttributes(options.Select, options.Exclude, options.ValidColumns)
 	if len(selectedColumns) > 0 {
-		db = db.Select(qualifySelectColumns(selectedColumns, options.SelectPrefix))
+		query := selectedColumns
+		for _, k := range options.KeepColumns {
+			if !containsString(query, k) {
+				query = append(append([]string{}, query...), k)
+			}
+		}
+		db = db.Select(qualifySelectColumns(query, options.SelectPrefix))
 	} else if len(options.Exclude) > 0 {
 		db = db.Omit(options.Exclude...)
 	}
@@ -124,6 +163,7 @@ func GetPaginatedDataOffset(db *gorm.DB, options OffsetPaginationOptions) (*Offs
 	if rows == nil {
 		rows = []map[string]interface{}{}
 	}
+	applyExternalJoins(rows, options.ExternalJoins)
 
 	totalPages := int(math.Ceil(float64(total) / float64(safeLimit)))
 	return &OffsetPaginationResult{
@@ -297,4 +337,44 @@ func toSnakeCase(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// applyExternalJoins resolves each ExternalJoin once for the whole page.
+func applyExternalJoins(rows []map[string]interface{}, joins []ExternalJoin) {
+	for _, j := range joins {
+		if j.Resolver == nil || j.Key == "" || j.As == "" {
+			continue
+		}
+		seen := map[string]bool{}
+		values := make([]string, 0, len(rows))
+		for _, r := range rows {
+			if v, ok := r[j.Key].(string); ok && v != "" && !seen[v] {
+				seen[v] = true
+				values = append(values, v)
+			}
+		}
+		if len(values) == 0 {
+			continue
+		}
+		resolved, err := j.Resolver(values)
+		if err != nil {
+			continue
+		}
+		for _, r := range rows {
+			if v, ok := r[j.Key].(string); ok {
+				if val, found := resolved[v]; found {
+					r[j.As] = val
+				}
+			}
+		}
+	}
+}
+
+func containsString(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

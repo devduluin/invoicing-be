@@ -15,7 +15,7 @@ import (
 	"duluin_invoice/utils"
 )
 
-var deliveryNoteListColumns = []string{"number", "date", "mitra_id", "created_at"}
+var deliveryNoteListColumns = []string{"number", "date", "mitra_id", "created_at", "created_by", "sales_order_id", "sales_invoice_id", "updated_by"}
 
 type DeliveryNoteRepository struct{ db *gorm.DB }
 
@@ -128,6 +128,16 @@ func (r *DeliveryNoteRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		ValidColumns:         deliveryNoteListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
+			{Name: "SalesOrderRel", Columns: []string{"id", "number"}},
+			{Name: "SalesInvoiceRel", Columns: []string{"id", "number"}},
+		},
+		KeepColumns: []string{"mitra_id", "sales_order_id", "sales_invoice_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

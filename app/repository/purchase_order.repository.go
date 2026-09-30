@@ -17,7 +17,8 @@ import (
 
 // purchaseOrderListColumns — fields the MasterTable may show / sort by.
 var purchaseOrderListColumns = []string{
-	"number", "date", "status", "mitra_id", "grand_total", "created_at",
+	"number", "date", "status", "mitra_id", "grand_total", "created_at", "created_by",
+	"contact_name", "updated_by",
 }
 
 type PurchaseOrderRepository struct{ db *gorm.DB }
@@ -244,6 +245,14 @@ func (r *PurchaseOrderRepository) FindAll(f *domain.Filter) (*utils.OffsetPagina
 		ValidColumns:         purchaseOrderListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
+		},
+		KeepColumns: []string{"mitra_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

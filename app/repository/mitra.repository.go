@@ -18,8 +18,7 @@ import (
 
 // mitraListColumns — fields the MasterTable may show / sort by.
 var mitraListColumns = []string{
-	"code", "linked_company_code", "type", "name", "contact_name", "email", "phone", "npwp", "address",
-	"is_active", "created_at", "updated_at",
+	"code", "linked_company_code", "type", "name", "contact_name", "email", "phone", "npwp", "address", "is_active", "created_at", "updated_at", "created_by", "linked_company_id", "updated_by",
 }
 
 // mitraColumns is the explicit projection for mitra reads (avoids SELECT *).
@@ -251,6 +250,14 @@ func (r *MitraRepository) FindAll(filter *domain.MitraFilter) (*utils.OffsetPagi
 		Select:               filter.Fields,
 		ValidColumns:         mitraListColumns,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "LinkedCompanyRel", Columns: []string{"id", "code", "name"}},
+		},
+		KeepColumns: []string{"linked_company_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, filter.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, filter.CompanyID)},
+		},
 	})
 }
 

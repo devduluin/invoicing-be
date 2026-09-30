@@ -21,7 +21,7 @@ var journalBookColumns = []string{
 }
 
 // journalBookListColumns — fields the MasterTable may show / sort by.
-var journalBookListColumns = []string{"code", "name", "type", "is_system", "is_active", "created_at"}
+var journalBookListColumns = []string{"code", "name", "type", "is_system", "is_active", "created_at", "default_account_id", "default_debit_account_id", "default_credit_account_id", "created_by", "updated_by"}
 
 type JournalBookRepository struct{ db *gorm.DB }
 
@@ -138,6 +138,16 @@ func (r *JournalBookRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginati
 		Select:               f.Fields,
 		ValidColumns:         journalBookListColumns,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "DefaultAccountRel", Columns: []string{"id", "code", "name"}},
+			{Name: "DefaultDebitAccountRel", Columns: []string{"id", "code", "name"}},
+			{Name: "DefaultCreditAccountRel", Columns: []string{"id", "code", "name"}},
+		},
+		KeepColumns: []string{"default_account_id", "default_debit_account_id", "default_credit_account_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

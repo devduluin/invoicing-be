@@ -62,6 +62,8 @@ type Mitra struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"        json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)"      json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"                 json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	LinkedCompanyRel *Company `gorm:"foreignKey:LinkedCompanyID;-:migration" json:"linked_company_id_rel,omitempty"`
 }
 
 func (Mitra) TableName() string { return "mitra" }

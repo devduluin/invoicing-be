@@ -22,6 +22,7 @@ var accountColumns = []string{
 // accountListColumns — fields the MasterTable may show / sort by.
 var accountListColumns = []string{
 	"code", "name", "group", "parent_id", "is_system", "is_active", "created_at", "updated_at",
+	"created_by", "updated_by",
 }
 
 type AccountRepository struct{ db *gorm.DB }
@@ -146,6 +147,14 @@ func (r *AccountRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginationRe
 		Select:               f.Fields,
 		ValidColumns:         accountListColumns,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "ParentRel", Columns: []string{"id", "code", "name"}},
+		},
+		KeepColumns: []string{"parent_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

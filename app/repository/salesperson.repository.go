@@ -23,7 +23,7 @@ var salespersonColumns = []string{
 	"created_at", "created_by", "updated_at", "updated_by",
 }
 
-var salespersonListColumns = []string{"code", "name", "email", "phone", "user_id", "is_active", "created_at", "updated_at"}
+var salespersonListColumns = []string{"code", "name", "email", "phone", "user_id", "is_active", "created_at", "updated_at", "created_by", "updated_by"}
 
 type SalespersonRepository struct{ db *gorm.DB }
 
@@ -169,6 +169,12 @@ func (r *SalespersonRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginati
 		Select:               f.Fields,
 		ValidColumns:         salespersonListColumns,
 		PreserveAssociations: true,
+		KeepColumns:          []string{"user_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "user_id", As: "user_id_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

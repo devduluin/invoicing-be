@@ -34,11 +34,13 @@ func IsValidSalesReceiptPaymentMethod(v string) bool {
 // SalesPaymentRepository.Verify maintains, via the same shared, row-locked
 // primitive so the two paths can never double-count.
 type SalesReceipt struct {
-	ID        string    `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID string    `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID   string    `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	Number    string    `gorm:"type:varchar(50);not null"  json:"number"`
-	Date      time.Time `gorm:"type:date;not null"         json:"date"`
+	ID        string `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID string `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID   string `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra  *Mitra    `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
+	Number string    `gorm:"type:varchar(50);not null"  json:"number"`
+	Date   time.Time `gorm:"type:date;not null"         json:"date"`
 	// Amount — the receipt's total, computed once at create time as the
 	// sum of Allocations' amounts (materialized for fast list display,
 	// same convention as SalesInvoice.GrandTotal). Never entered directly.
@@ -61,6 +63,9 @@ type SalesReceipt struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel       *Mitra       `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
+	BankAccountRel *BankAccount `gorm:"foreignKey:BankAccountID;-:migration" json:"bank_account_id_rel,omitempty"`
 }
 
 func (SalesReceipt) TableName() string { return "sales_receipts" }

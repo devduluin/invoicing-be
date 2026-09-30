@@ -77,6 +77,11 @@ type Tax struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	SalesAccountRel    *Account `gorm:"foreignKey:SalesAccountID;-:migration" json:"sales_account_id_rel,omitempty"`
+	PurchaseAccountRel *Account `gorm:"foreignKey:PurchaseAccountID;-:migration" json:"purchase_account_id_rel,omitempty"`
+	Component1Rel      *Tax     `gorm:"foreignKey:Component1ID;-:migration" json:"component1_id_rel,omitempty"`
+	Component2Rel      *Tax     `gorm:"foreignKey:Component2ID;-:migration" json:"component2_id_rel,omitempty"`
 }
 
 func (Tax) TableName() string { return "taxes" }

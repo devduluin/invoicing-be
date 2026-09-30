@@ -14,9 +14,11 @@ import (
 // power the frontend's "pre-fill from order" convenience — no quantity-
 // remaining tracking across multiple receipts against one order.
 type GoodsReceipt struct {
-	ID              string    `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID       string    `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID         string    `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	ID        string `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID string `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID   string `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra           *Mitra    `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
 	PurchaseOrderID *string   `gorm:"type:uuid;index"            json:"purchase_order_id,omitempty"`
 	Number          string    `gorm:"type:varchar(50);not null"  json:"number"`
 	Date            time.Time `gorm:"type:date;not null"         json:"date"`
@@ -44,6 +46,9 @@ type GoodsReceipt struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel         *Mitra         `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
+	PurchaseOrderRel *PurchaseOrder `gorm:"foreignKey:PurchaseOrderID;-:migration" json:"purchase_order_id_rel,omitempty"`
 }
 
 func (GoodsReceipt) TableName() string { return "goods_receipts" }

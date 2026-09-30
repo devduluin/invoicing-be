@@ -35,20 +35,22 @@ const (
 // PurchaseReceipts linked to the invoice; they move PaidAmount/PaymentStatus,
 // and the outstanding amount is GrandTotal - PaidAmount.
 type PurchaseInvoice struct {
-	ID              string                `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID       string                `gorm:"type:uuid;not null;index"   json:"company_id"`
-	PurchaseOrderID *string               `gorm:"type:uuid;index"            json:"purchase_order_id,omitempty"`
-	MitraID         string                `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	Number          string                `gorm:"type:varchar(50);not null"  json:"number"`
-	Date            time.Time             `gorm:"type:date;not null"         json:"date"`
-	DueDate         *time.Time            `gorm:"type:date"                  json:"due_date,omitempty"`
-	RefNo           string                `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
-	Notes           string                `gorm:"type:text"                  json:"notes,omitempty"`
-	Status          PurchaseInvoiceStatus `gorm:"type:varchar(20);not null;default:'draft';index" json:"status"`
-	Subtotal        float64               `gorm:"type:numeric(18,2);not null;default:0" json:"subtotal"`
-	DiscountTotal   float64               `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
-	TaxTotal        float64               `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
-	GrandTotal      float64               `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
+	ID              string  `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID       string  `gorm:"type:uuid;not null;index"   json:"company_id"`
+	PurchaseOrderID *string `gorm:"type:uuid;index"            json:"purchase_order_id,omitempty"`
+	MitraID         string  `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra         *Mitra                `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
+	Number        string                `gorm:"type:varchar(50);not null"  json:"number"`
+	Date          time.Time             `gorm:"type:date;not null"         json:"date"`
+	DueDate       *time.Time            `gorm:"type:date"                  json:"due_date,omitempty"`
+	RefNo         string                `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
+	Notes         string                `gorm:"type:text"                  json:"notes,omitempty"`
+	Status        PurchaseInvoiceStatus `gorm:"type:varchar(20);not null;default:'draft';index" json:"status"`
+	Subtotal      float64               `gorm:"type:numeric(18,2);not null;default:0" json:"subtotal"`
+	DiscountTotal float64               `gorm:"type:numeric(18,2);not null;default:0" json:"discount_total"`
+	TaxTotal      float64               `gorm:"type:numeric(18,2);not null;default:0" json:"tax_total"`
+	GrandTotal    float64               `gorm:"type:numeric(18,2);not null;default:0" json:"grand_total"`
 
 	// Payment tracking, maintained by PurchaseReceipt create/update/delete.
 	PaidAmount    float64                      `gorm:"type:numeric(18,2);not null;default:0" json:"paid_amount"`
@@ -100,6 +102,9 @@ type PurchaseInvoice struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel         *Mitra         `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
+	PurchaseOrderRel *PurchaseOrder `gorm:"foreignKey:PurchaseOrderID;-:migration" json:"purchase_order_id_rel,omitempty"`
 }
 
 func (PurchaseInvoice) TableName() string { return "purchase_invoices" }

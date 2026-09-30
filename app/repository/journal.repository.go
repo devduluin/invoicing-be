@@ -18,7 +18,7 @@ import (
 
 // journalListColumns — fields the MasterTable may show / sort by.
 var journalListColumns = []string{
-	"number", "date", "description", "status", "total_debit", "total_credit", "created_at",
+	"number", "date", "description", "status", "total_debit", "total_credit", "created_at", "journal_book_id", "created_by", "updated_by",
 }
 
 type JournalRepository struct{ db *gorm.DB }
@@ -228,6 +228,14 @@ func (r *JournalRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginationRe
 		Select:               f.Fields,
 		ValidColumns:         journalListColumns,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "JournalBookRel", Columns: []string{"id", "code", "name"}},
+		},
+		KeepColumns: []string{"journal_book_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

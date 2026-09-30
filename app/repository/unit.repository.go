@@ -19,7 +19,7 @@ var unitColumns = []string{
 	"created_at", "created_by", "updated_at", "updated_by",
 }
 
-var unitListColumns = []string{"name", "symbol", "is_system", "is_active", "created_at", "updated_at"}
+var unitListColumns = []string{"name", "symbol", "is_system", "is_active", "created_at", "updated_at", "created_by", "updated_by"}
 
 type UnitRepository struct{ db *gorm.DB }
 
@@ -104,6 +104,11 @@ func (r *UnitRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginationResul
 		Select:               f.Fields,
 		ValidColumns:         unitListColumns,
 		PreserveAssociations: true,
+		KeepColumns:          []string{"created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

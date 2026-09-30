@@ -84,15 +84,17 @@ type SalesInvoice struct {
 	// LinkedInvoiceID — for a down-payment invoice (Kind=down_payment),
 	// the regular invoice it's a down payment against. Purely a reference,
 	// like SalesOrderID — no automatic balance/amount coupling.
-	LinkedInvoiceID *string          `gorm:"type:uuid;index"            json:"linked_invoice_id,omitempty"`
-	MitraID         string           `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	Kind            SalesInvoiceKind `gorm:"type:varchar(20);not null;index" json:"kind"`
-	Number          string           `gorm:"type:varchar(50);not null"  json:"number"`
-	Date            time.Time        `gorm:"type:date;not null"         json:"date"`
-	DueDate         *time.Time       `gorm:"type:date"                  json:"due_date,omitempty"`
-	RefNo           string           `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
-	Notes           string           `gorm:"type:text"                  json:"notes,omitempty"`
-	Terms           string           `gorm:"type:text"                  json:"terms,omitempty"`
+	LinkedInvoiceID *string `gorm:"type:uuid;index"            json:"linked_invoice_id,omitempty"`
+	MitraID         string  `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra   *Mitra           `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
+	Kind    SalesInvoiceKind `gorm:"type:varchar(20);not null;index" json:"kind"`
+	Number  string           `gorm:"type:varchar(50);not null"  json:"number"`
+	Date    time.Time        `gorm:"type:date;not null"         json:"date"`
+	DueDate *time.Time       `gorm:"type:date"                  json:"due_date,omitempty"`
+	RefNo   string           `gorm:"type:varchar(100)"          json:"ref_no,omitempty"`
+	Notes   string           `gorm:"type:text"                  json:"notes,omitempty"`
+	Terms   string           `gorm:"type:text"                  json:"terms,omitempty"`
 	// Template — layout choice, see SalesInvoiceTemplate. Existing rows pick up
 	// the column default (template_1) on migration.
 	Template string `gorm:"type:varchar(20);not null;default:'template_1'" json:"template"`
@@ -160,6 +162,11 @@ type SalesInvoice struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel         *Mitra        `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
+	SalesOrderRel    *SalesOrder   `gorm:"foreignKey:SalesOrderID;-:migration" json:"sales_order_id_rel,omitempty"`
+	LinkedInvoiceRel *SalesInvoice `gorm:"foreignKey:LinkedInvoiceID;-:migration" json:"linked_invoice_id_rel,omitempty"`
+	SalespersonRel   *Salesperson  `gorm:"foreignKey:SalespersonID;-:migration" json:"salesperson_id_rel,omitempty"`
 }
 
 func (SalesInvoice) TableName() string { return "sales_invoices" }

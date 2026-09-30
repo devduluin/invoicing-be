@@ -52,6 +52,10 @@ type JournalBook struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	DefaultAccountRel       *Account `gorm:"foreignKey:DefaultAccountID;-:migration" json:"default_account_id_rel,omitempty"`
+	DefaultDebitAccountRel  *Account `gorm:"foreignKey:DefaultDebitAccountID;-:migration" json:"default_debit_account_id_rel,omitempty"`
+	DefaultCreditAccountRel *Account `gorm:"foreignKey:DefaultCreditAccountID;-:migration" json:"default_credit_account_id_rel,omitempty"`
 }
 
 func (JournalBook) TableName() string { return "journal_books" }

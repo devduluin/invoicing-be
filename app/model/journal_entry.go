@@ -40,6 +40,8 @@ type JournalEntry struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	JournalBookRel *JournalBook `gorm:"foreignKey:JournalBookID;-:migration" json:"journal_book_id_rel,omitempty"`
 }
 
 func (JournalEntry) TableName() string { return "journal_entries" }

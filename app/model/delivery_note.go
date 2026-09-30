@@ -14,9 +14,11 @@ import (
 // "pre-fill from order" convenience — no quantity-remaining tracking
 // across multiple notes against one order.
 type DeliveryNote struct {
-	ID           string  `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID    string  `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID      string  `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	ID        string `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID string `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID   string `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra        *Mitra  `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
 	SalesOrderID *string `gorm:"type:uuid;index"            json:"sales_order_id,omitempty"`
 	// SalesInvoiceID — the same free-form traceability as SalesOrderID, for
 	// a delivery note raised from an already-billed invoice instead of an
@@ -50,6 +52,10 @@ type DeliveryNote struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel        *Mitra        `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
+	SalesOrderRel   *SalesOrder   `gorm:"foreignKey:SalesOrderID;-:migration" json:"sales_order_id_rel,omitempty"`
+	SalesInvoiceRel *SalesInvoice `gorm:"foreignKey:SalesInvoiceID;-:migration" json:"sales_invoice_id_rel,omitempty"`
 }
 
 func (DeliveryNote) TableName() string { return "delivery_notes" }

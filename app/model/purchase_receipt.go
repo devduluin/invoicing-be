@@ -31,11 +31,13 @@ func IsValidPurchaseReceiptPaymentMethod(v string) bool {
 // invoices via Allocations; each allocation updates that invoice's PaidAmount/PaymentStatus (see
 // PurchaseReceiptRepository.Create / applyPurchaseInvoicePayment).
 type PurchaseReceipt struct {
-	ID        string    `gorm:"type:uuid;primaryKey"       json:"id"`
-	CompanyID string    `gorm:"type:uuid;not null;index"   json:"company_id"`
-	MitraID   string    `gorm:"type:uuid;not null;index"   json:"mitra_id"`
-	Number    string    `gorm:"type:varchar(50);not null"  json:"number"`
-	Date      time.Time `gorm:"type:date;not null"         json:"date"`
+	ID        string `gorm:"type:uuid;primaryKey"       json:"id"`
+	CompanyID string `gorm:"type:uuid;not null;index"   json:"company_id"`
+	MitraID   string `gorm:"type:uuid;not null;index"   json:"mitra_id"`
+	// Mitra — preloaded on lists only (partner code + name); never migrated as a FK constraint.
+	Mitra  *Mitra    `gorm:"foreignKey:MitraID;-:migration" json:"mitra,omitempty"`
+	Number string    `gorm:"type:varchar(50);not null"  json:"number"`
+	Date   time.Time `gorm:"type:date;not null"         json:"date"`
 	// Amount — the receipt's total, computed once at create time as the sum of Allocations'
 	// amounts (materialized for fast list display, same convention as SalesReceipt.Amount).
 	Amount        float64                      `gorm:"type:numeric(18,2);not null;default:0" json:"amount"`
@@ -57,6 +59,9 @@ type PurchaseReceipt struct {
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"   json:"updated_at"`
 	UpdatedBy string         `gorm:"type:varchar(64)" json:"updated_by,omitempty"`
 	DeletedAt gorm.DeletedAt `gorm:"index"            json:"-"`
+	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
+	MitraRel       *Mitra       `gorm:"foreignKey:MitraID;-:migration" json:"mitra_id_rel,omitempty"`
+	BankAccountRel *BankAccount `gorm:"foreignKey:BankAccountID;-:migration" json:"bank_account_id_rel,omitempty"`
 }
 
 func (PurchaseReceipt) TableName() string { return "purchase_receipts" }

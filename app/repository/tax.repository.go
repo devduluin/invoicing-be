@@ -23,9 +23,7 @@ var taxColumns = []string{
 
 // taxListColumns — fields the MasterTable may show / sort by.
 var taxListColumns = []string{
-	"name", "kind", "rate", "calc_method", "is_system", "is_active",
-	"is_compound", "sales_account_id", "purchase_account_id",
-	"created_at", "updated_at",
+	"name", "kind", "rate", "calc_method", "is_system", "is_active", "is_compound", "sales_account_id", "purchase_account_id", "created_at", "updated_at", "component1_id", "component2_id", "created_by", "updated_by",
 }
 
 type TaxRepository struct{ db *gorm.DB }
@@ -174,6 +172,17 @@ func (r *TaxRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginationResult
 		Select:               f.Fields,
 		ValidColumns:         taxListColumns,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "SalesAccountRel", Columns: []string{"id", "code", "name"}},
+			{Name: "PurchaseAccountRel", Columns: []string{"id", "code", "name"}},
+			{Name: "Component1Rel", Columns: []string{"id", "name"}},
+			{Name: "Component2Rel", Columns: []string{"id", "name"}},
+		},
+		KeepColumns: []string{"sales_account_id", "purchase_account_id", "component1_id", "component2_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 

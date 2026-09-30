@@ -17,7 +17,7 @@ import (
 
 // salesInvoiceListColumns — fields the MasterTable may show / sort by.
 var salesInvoiceListColumns = []string{
-	"number", "date", "due_date", "status", "payment_status", "kind", "mitra_id", "grand_total", "created_at",
+	"number", "date", "due_date", "status", "mitra_id", "grand_total", "created_at", "created_by", "sales_order_id", "linked_invoice_id", "salesperson_id", "contact_name", "updated_by", "paid_amount",
 }
 
 type SalesInvoiceRepository struct{ db *gorm.DB }
@@ -406,6 +406,17 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		ValidColumns:         salesInvoiceListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		PreloadRelations: []utils.PreloadRelation{
+			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
+			{Name: "SalesOrderRel", Columns: []string{"id", "number"}},
+			{Name: "LinkedInvoiceRel", Columns: []string{"id", "number"}},
+			{Name: "SalespersonRel", Columns: []string{"id", "code", "name"}},
+		},
+		KeepColumns: []string{"mitra_id", "sales_order_id", "linked_invoice_id", "salesperson_id", "created_by", "updated_by"},
+		ExternalJoins: []utils.ExternalJoin{
+			{Key: "created_by", As: "created_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+			{Key: "updated_by", As: "updated_by_rel", Resolver: memberNameResolver(r.db, f.CompanyID)},
+		},
 	})
 }
 
