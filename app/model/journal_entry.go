@@ -69,6 +69,8 @@ type JournalLine struct {
 	Debit          float64 `gorm:"type:numeric(18,2);not null;default:0" json:"debit"`
 	Credit         float64 `gorm:"type:numeric(18,2);not null;default:0" json:"credit"`
 	LineOrder      int     `gorm:"not null;default:0"       json:"line_order"`
+	// AccountRel — the account code + name, for exports; never migrated as a FK constraint.
+	AccountRel *Account `gorm:"foreignKey:AccountID;-:migration" json:"account_id_rel,omitempty"`
 }
 
 func (JournalLine) TableName() string { return "journal_lines" }

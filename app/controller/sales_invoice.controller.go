@@ -52,6 +52,7 @@ func (ctrl *SalesInvoiceController) logInvoice(c *fiber.Ctx, action string, row 
 func (ctrl *SalesInvoiceController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
 		CompanyID:     middlewares.GetCompanyID(c),
+		WithDetails:   c.Query("with") == "details",
 		Kind:          c.Query("kind"),
 		Search:        c.Query("search"),
 		MitraID:       c.Query("mitra_id"),

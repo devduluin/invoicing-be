@@ -93,6 +93,8 @@ type Filter struct {
 	Sort          string
 	Order         string
 	Fields        []string
+	// WithDetails — ?with=details: also load the lines / contact persons (exports).
+	WithDetails bool
 }
 
 // TaxInfo — the two fields calcLines needs from a referenced tax.

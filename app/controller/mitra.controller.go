@@ -86,15 +86,16 @@ func (ctrl *MitraController) Import(c *fiber.Ctx) error {
 
 func (ctrl *MitraController) List(c *fiber.Ctx) error {
 	filter := &domain.MitraFilter{
-		CompanyID: middlewares.GetCompanyID(c),
-		Search:    c.Query("search"),
-		Type:      c.Query("type"),
-		Page:      c.QueryInt("page", 1),
-		PageSize:  c.QueryInt("limit", 20),
-		IsActive:  utils.ParseBoolQuery(c.Query("is_active")),
-		Sort:      c.Query("sort"),
-		Order:     c.Query("order"),
-		Fields:    utils.ParseCSVParam(c.Query("fields")),
+		CompanyID:   middlewares.GetCompanyID(c),
+		WithDetails: c.Query("with") == "details",
+		Search:      c.Query("search"),
+		Type:        c.Query("type"),
+		Page:        c.QueryInt("page", 1),
+		PageSize:    c.QueryInt("limit", 20),
+		IsActive:    utils.ParseBoolQuery(c.Query("is_active")),
+		Sort:        c.Query("sort"),
+		Order:       c.Query("order"),
+		Fields:      utils.ParseCSVParam(c.Query("fields")),
 	}
 
 	res, err := ctrl.svc.List(filter)

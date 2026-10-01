@@ -406,6 +406,10 @@ func (r *SalesInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		ValidColumns:         salesInvoiceListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		DetailPreloads: []utils.PreloadRelation{
+			{Name: "Lines", Scoped: true, Order: "line_order ASC"},
+		},
+		WithDetails: f.WithDetails,
 		PreloadRelations: []utils.PreloadRelation{
 			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
 			{Name: "SalesOrderRel", Columns: []string{"id", "number"}},

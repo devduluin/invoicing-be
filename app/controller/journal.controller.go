@@ -20,6 +20,7 @@ func NewJournalController(svc domain.IService) *JournalController {
 func (ctrl *JournalController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
 		CompanyID:     middlewares.GetCompanyID(c),
+		WithDetails:   c.Query("with") == "details",
 		Search:        c.Query("search"),
 		JournalBookID: c.Query("journal_book_id"),
 		Status:        c.Query("status"),

@@ -326,6 +326,10 @@ func (r *PurchaseInvoiceRepository) FindAll(f *domain.Filter) (*utils.OffsetPagi
 		ValidColumns:         purchaseInvoiceListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		DetailPreloads: []utils.PreloadRelation{
+			{Name: "Lines", Scoped: true, Order: "line_order ASC"},
+		},
+		WithDetails: f.WithDetails,
 		PreloadRelations: []utils.PreloadRelation{
 			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
 			{Name: "PurchaseOrderRel", Columns: []string{"id", "number"}},

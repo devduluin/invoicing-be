@@ -27,6 +27,7 @@ func NewSalesOrderController(svc domain.IService, ssoClient *sso.Client, auditSv
 func (ctrl *SalesOrderController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
 		CompanyID:     middlewares.GetCompanyID(c),
+		WithDetails:   c.Query("with") == "details",
 		Search:        c.Query("search"),
 		MitraID:       c.Query("mitra_id"),
 		SalespersonID: c.Query("salesperson_id"),

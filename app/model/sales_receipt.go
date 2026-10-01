@@ -85,6 +85,8 @@ type SalesReceiptAllocation struct {
 	SalesInvoiceID string  `gorm:"type:uuid;not null;index" json:"sales_invoice_id"`
 	CompanyID      string  `gorm:"type:uuid;not null;index" json:"company_id"`
 	Amount         float64 `gorm:"type:numeric(18,2);not null;default:0" json:"amount"`
+	// SalesInvoiceRel — the invoice number, for exports; never migrated as a FK constraint.
+	SalesInvoiceRel *SalesInvoice `gorm:"foreignKey:SalesInvoiceID;-:migration" json:"sales_invoice_id_rel,omitempty"`
 }
 
 func (SalesReceiptAllocation) TableName() string { return "sales_receipt_allocations" }

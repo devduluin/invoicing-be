@@ -28,6 +28,7 @@ func NewPurchaseInvoiceController(svc domain.IService, ssoClient *sso.Client, au
 func (ctrl *PurchaseInvoiceController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
 		CompanyID:     middlewares.GetCompanyID(c),
+		WithDetails:   c.Query("with") == "details",
 		Search:        c.Query("search"),
 		MitraID:       c.Query("mitra_id"),
 		Status:        c.Query("status"),

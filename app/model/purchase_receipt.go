@@ -81,6 +81,8 @@ type PurchaseReceiptAllocation struct {
 	PurchaseInvoiceID string  `gorm:"type:uuid;not null;index" json:"purchase_invoice_id"`
 	CompanyID         string  `gorm:"type:uuid;not null;index" json:"company_id"`
 	Amount            float64 `gorm:"type:numeric(18,2);not null;default:0" json:"amount"`
+	// PurchaseInvoiceRel — the invoice number, for exports; never migrated as a FK constraint.
+	PurchaseInvoiceRel *PurchaseInvoice `gorm:"foreignKey:PurchaseInvoiceID;-:migration" json:"purchase_invoice_id_rel,omitempty"`
 }
 
 func (PurchaseReceiptAllocation) TableName() string { return "purchase_receipt_allocations" }

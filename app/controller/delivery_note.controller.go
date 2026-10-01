@@ -26,6 +26,7 @@ func NewDeliveryNoteController(svc domain.IService, ssoClient *sso.Client, audit
 func (ctrl *DeliveryNoteController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
 		CompanyID:    middlewares.GetCompanyID(c),
+		WithDetails:  c.Query("with") == "details",
 		Search:       c.Query("search"),
 		MitraID:      c.Query("mitra_id"),
 		SalesOrderID: c.Query("sales_order_id"),

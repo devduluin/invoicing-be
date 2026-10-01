@@ -35,12 +35,20 @@ type OffsetPaginationOptions struct {
 	// ExternalJoins fill a row field from data a GORM relation can't reach (another table keyed by a
 	// non-FK value, or another service): one batched lookup per page, never one per row.
 	ExternalJoins []ExternalJoin
+	// DetailPreloads are loaded only when WithDetails (a list asked with ?with=details, e.g. an export):
+	// a document's lines, a partner's contact persons. Kept off the normal list so it stays light.
+	DetailPreloads []PreloadRelation
+	WithDetails    bool
 }
 
 // PreloadRelation — a GORM association to preload with a narrow column list.
 type PreloadRelation struct {
 	Name    string   // association field, e.g. "Mitra"
 	Columns []string // e.g. {"id", "code", "name"}; empty = all
+	// Scoped keeps soft-deleted related rows out (a partner's deleted contact persons); by default they
+	// are included (a document still shows the partner it was made for after that partner was deleted).
+	Scoped bool
+	Order  string // e.g. "line_order ASC"
 }
 
 // ExternalJoin puts Resolver(distinct values of row[Key])[value] into row[As]. A resolver error leaves
@@ -83,12 +91,21 @@ func GetPaginatedDataOffset(db *gorm.DB, options OffsetPaginationOptions) (*Offs
 		}
 		db = db.Preload(preload)
 	}
-	for _, rel := range options.PreloadRelations {
-		cols := rel.Columns
+	rels := options.PreloadRelations
+	if options.WithDetails {
+		rels = append(append([]PreloadRelation{}, rels...), options.DetailPreloads...)
+	}
+	for _, rel := range rels {
+		rel := rel
 		db = db.Preload(rel.Name, func(tx *gorm.DB) *gorm.DB {
-			tx = tx.Unscoped()
-			if len(cols) > 0 {
-				tx = tx.Select(cols)
+			if !rel.Scoped {
+				tx = tx.Unscoped()
+			}
+			if len(rel.Columns) > 0 {
+				tx = tx.Select(rel.Columns)
+			}
+			if rel.Order != "" {
+				tx = tx.Order(rel.Order)
 			}
 			return tx
 		})

@@ -26,6 +26,7 @@ func NewPurchaseReceiptController(svc domain.IService, auditSvc audit.ILogger, s
 func (ctrl *PurchaseReceiptController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
 		CompanyID:         middlewares.GetCompanyID(c),
+		WithDetails:       c.Query("with") == "details",
 		Search:            c.Query("search"),
 		MitraID:           c.Query("mitra_id"),
 		PurchaseInvoiceID: c.Query("purchase_invoice_id"),

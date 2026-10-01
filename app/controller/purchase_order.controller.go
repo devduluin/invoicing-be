@@ -26,15 +26,16 @@ func NewPurchaseOrderController(svc domain.IService, ssoClient *sso.Client, audi
 
 func (ctrl *PurchaseOrderController) List(c *fiber.Ctx) error {
 	res, err := ctrl.svc.List(&domain.Filter{
-		CompanyID: middlewares.GetCompanyID(c),
-		Search:    c.Query("search"),
-		MitraID:   c.Query("mitra_id"),
-		Status:    c.Query("status"),
-		Page:      c.QueryInt("page", 1),
-		PageSize:  c.QueryInt("limit", 20),
-		Sort:      c.Query("sort"),
-		Order:     c.Query("order"),
-		Fields:    utils.ParseCSVParam(c.Query("fields")),
+		CompanyID:   middlewares.GetCompanyID(c),
+		WithDetails: c.Query("with") == "details",
+		Search:      c.Query("search"),
+		MitraID:     c.Query("mitra_id"),
+		Status:      c.Query("status"),
+		Page:        c.QueryInt("page", 1),
+		PageSize:    c.QueryInt("limit", 20),
+		Sort:        c.Query("sort"),
+		Order:       c.Query("order"),
+		Fields:      utils.ParseCSVParam(c.Query("fields")),
 	})
 	if err != nil {
 		return utils.InternalError(c, err)

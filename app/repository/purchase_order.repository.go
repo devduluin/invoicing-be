@@ -245,6 +245,10 @@ func (r *PurchaseOrderRepository) FindAll(f *domain.Filter) (*utils.OffsetPagina
 		ValidColumns:         purchaseOrderListColumns,
 		Exclude:              listBlobExclude,
 		PreserveAssociations: true,
+		DetailPreloads: []utils.PreloadRelation{
+			{Name: "Lines", Scoped: true, Order: "line_order ASC"},
+		},
+		WithDetails: f.WithDetails,
 		PreloadRelations: []utils.PreloadRelation{
 			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
 		},

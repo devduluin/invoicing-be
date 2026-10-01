@@ -250,6 +250,10 @@ func (r *MitraRepository) FindAll(filter *domain.MitraFilter) (*utils.OffsetPagi
 		Select:               filter.Fields,
 		ValidColumns:         mitraListColumns,
 		PreserveAssociations: true,
+		DetailPreloads: []utils.PreloadRelation{
+			{Name: "ContactPersons", Scoped: true, Order: "is_pic DESC, name ASC"},
+		},
+		WithDetails: filter.WithDetails,
 		PreloadRelations: []utils.PreloadRelation{
 			{Name: "LinkedCompanyRel", Columns: []string{"id", "code", "name"}},
 		},

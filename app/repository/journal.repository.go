@@ -228,6 +228,11 @@ func (r *JournalRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginationRe
 		Select:               f.Fields,
 		ValidColumns:         journalListColumns,
 		PreserveAssociations: true,
+		DetailPreloads: []utils.PreloadRelation{
+			{Name: "Lines", Scoped: true, Order: "line_order ASC"},
+			{Name: "Lines.AccountRel", Columns: []string{"id", "code", "name"}},
+		},
+		WithDetails: f.WithDetails,
 		PreloadRelations: []utils.PreloadRelation{
 			{Name: "JournalBookRel", Columns: []string{"id", "code", "name"}},
 		},

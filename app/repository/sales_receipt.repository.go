@@ -138,6 +138,11 @@ func (r *SalesReceiptRepository) FindAll(f *domain.Filter) (*utils.OffsetPaginat
 		ValidColumns:         salesReceiptListColumns,
 		Preloads:             []string{"Allocations"},
 		PreserveAssociations: true,
+		DetailPreloads: []utils.PreloadRelation{
+			{Name: "Allocations", Scoped: true},
+			{Name: "Allocations.SalesInvoiceRel", Columns: []string{"id", "number"}},
+		},
+		WithDetails: f.WithDetails,
 		PreloadRelations: []utils.PreloadRelation{
 			{Name: "MitraRel", Columns: []string{"id", "code", "name"}},
 			{Name: "BankAccountRel", Columns: []string{"id", "bank_name", "account_number"}},

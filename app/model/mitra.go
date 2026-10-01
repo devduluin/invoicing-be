@@ -64,6 +64,8 @@ type Mitra struct {
 	DeletedAt gorm.DeletedAt `gorm:"index"                 json:"-"`
 	// Relations preloaded by the list endpoint (shown as "<fk>_rel"); never migrated as FK constraints.
 	LinkedCompanyRel *Company `gorm:"foreignKey:LinkedCompanyID;-:migration" json:"linked_company_id_rel,omitempty"`
+	// ContactPersons — loaded for exports only (?with=details); never migrated as a FK constraint.
+	ContactPersons []ContactPerson `gorm:"foreignKey:MitraID;-:migration" json:"contact_persons,omitempty"`
 }
 
 func (Mitra) TableName() string { return "mitra" }
