@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,13 +14,27 @@ import (
 // fakePurchaseInvoiceRepo — a small hand-written stand-in for
 // domain.IRepository (same style as fakeSalesInvoiceRepo).
 type fakePurchaseInvoiceRepo struct {
-	invoice     *model.PurchaseInvoice
-	taxRates    map[string]utils.TaxRate
-	mitraExists bool
-	imported    []domain.ImportItem
+	existingNumbers map[string]bool
+	invoice         *model.PurchaseInvoice
+	taxRates        map[string]utils.TaxRate
+	mitraExists     bool
+	imported        []domain.ImportItem
 }
 
-func (f *fakePurchaseInvoiceRepo) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+func (f *fakePurchaseInvoiceRepo) ImportExistingNumbers(companyID string, numbers []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, n := range numbers {
+		if f.existingNumbers[strings.ToLower(n)] {
+			out[strings.ToLower(n)] = true
+		}
+	}
+	return out, nil
+}
+
+func (f *fakePurchaseInvoiceRepo) ImportMany(items []domain.ImportItem, actorID string, prior []string) ([]domain.ImportCreated, error) {
+	if len(prior) > 0 { // like the real one: checked, rolled back, returned together
+		return nil, &utils.ImportErrors{Messages: prior}
+	}
 	f.imported = items
 	out := make([]domain.ImportCreated, len(items))
 	for i, it := range items {

@@ -149,10 +149,18 @@ func (ctrl *SalesInvoiceController) Import(c *fiber.Ctx) error {
 	if err != nil {
 		return salesInvoiceErr(c, err)
 	}
+	added, updated := 0, 0
 	for _, inv := range created {
-		ctrl.logInvoice(c, audit.ActionCreated, &model.SalesInvoice{ID: inv.ID, Number: inv.Number, Kind: model.SalesInvoiceKindInvoice}, fmt.Sprintf("Imported %s", inv.Number), nil)
+		row := &model.SalesInvoice{ID: inv.ID, Number: inv.Number, Kind: model.SalesInvoiceKindInvoice}
+		if inv.Updated {
+			updated++
+			ctrl.logInvoice(c, audit.ActionUpdated, row, fmt.Sprintf("Updated %s from an import", inv.Number), nil)
+			continue
+		}
+		added++
+		ctrl.logInvoice(c, audit.ActionCreated, row, fmt.Sprintf("Imported %s", inv.Number), nil)
 	}
-	return utils.Created(c, fiber.Map{"created": len(created), "invoices": created}, fmt.Sprintf("%d invoices imported", len(created)))
+	return utils.Created(c, fiber.Map{"created": added, "updated": updated, "invoices": created}, importSummary(added, updated, "invoice"))
 }
 
 func (ctrl *SalesInvoiceController) Update(c *fiber.Ctx) error {
@@ -317,6 +325,10 @@ func (ctrl *SalesInvoiceController) Cancel(c *fiber.Ctx) error {
 func salesInvoiceErr(c *fiber.Ctx, err error) error {
 	if handled, resp := handleActivationError(c, err); handled {
 		return resp
+	}
+	var importErrs *utils.ImportErrors
+	if errors.As(err, &importErrs) {
+		return utils.ValidationFailed(c, importErrs.Messages)
 	}
 	var inUse *utils.ErrInUse
 	if errors.As(err, &inUse) {

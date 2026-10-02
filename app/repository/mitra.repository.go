@@ -51,27 +51,133 @@ func (r *MitraRepository) Create(dto *domain.CreateMitraDTO, actorID string) (*m
 }
 
 // CreateMany — the import: every partner (with its contacts) in ONE transaction, so a file either
-// lands completely or not at all. A failing partner is named in the error.
-func (r *MitraRepository) CreateMany(dtos []*domain.CreateMitraDTO, actorID string) ([]*model.Mitra, error) {
-	out := make([]*model.Mitra, 0, len(dtos))
+// lands completely or not at all. Each partner runs under its own savepoint: a partner the data
+// refuses (code in use, company already linked, duplicate contact) is rolled back to it and the rest
+// still get checked, so every problem of the file comes back at once (*utils.ImportErrors).
+//
+// prior — problems the caller already found in other rows: the file is still checked here, then
+// everything is rolled back and returned together with them.
+func (r *MitraRepository) ImportMany(items []domain.ImportMitraItem, actorID string, prior []string) ([]domain.ImportMitraResult, error) {
+	out := make([]domain.ImportMitraResult, 0, len(items))
+	msgs := append([]string(nil), prior...)
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		for _, dto := range dtos {
-			m, err := createMitraTx(tx, dto, actorID)
+		for i, it := range items {
+			sp := fmt.Sprintf("import_partner_%d", i)
+			if err := tx.SavePoint(sp).Error; err != nil {
+				return err
+			}
+			m, updated, err := importMitraTx(tx, it.DTO, actorID)
 			if err != nil {
 				var dup *domain.ErrCodeExists
 				var linked *domain.ErrCompanyLinked
 				var invalid *domain.ErrValidation
-				if mapped := mapContactErr(err); mapped != err || errors.As(err, &dup) || errors.As(err, &linked) || errors.As(err, &invalid) {
-					return &domain.ErrValidation{Message: dto.Name + ": " + mapped.Error()}
+				mapped := mapContactErr(err)
+				if mapped == err && !errors.As(err, &dup) && !errors.As(err, &linked) && !errors.As(err, &invalid) {
+					return err
 				}
-				return err
+				if err := tx.RollbackTo(sp).Error; err != nil {
+					return err
+				}
+				msgs = append(msgs, it.Label+": "+mapped.Error())
+				continue
 			}
-			out = append(out, m)
+			out = append(out, domain.ImportMitraResult{Mitra: m, Updated: updated})
+		}
+		if msgs != nil {
+			return &utils.ImportErrors{Messages: msgs}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// importMitraTx saves one partner of an import file: a code the company already has updates that
+// partner, a new or blank code creates one.
+func importMitraTx(tx *gorm.DB, dto *domain.CreateMitraDTO, actorID string) (*model.Mitra, bool, error) {
+	if code := strings.TrimSpace(dto.Code); code != "" {
+		var existing model.Mitra
+		err := tx.Select(mitraColumns).Where("company_id = ? AND lower(code) = lower(?)", dto.CompanyID, code).First(&existing).Error
+		if err == nil {
+			if err := importUpdateMitraTx(tx, &existing, dto, actorID); err != nil {
+				return nil, false, err
+			}
+			var saved model.Mitra // re-read: the caller logs the partner's new name
+			if err := tx.Select(mitraColumns).Where("id = ?", existing.ID).First(&saved).Error; err != nil {
+				return nil, false, fmt.Errorf("read partner %s: %w", existing.ID, err)
+			}
+			return &saved, true, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, fmt.Errorf("find partner %s: %w", code, err)
+		}
+	}
+	m, err := createMitraTx(tx, dto, actorID)
+	return m, false, err
+}
+
+// importUpdateMitraTx updates an existing partner from an import row, the same edit as the form:
+// company and PIC details come from the file; an optional cell left blank (NPWP, address, Duluin
+// Company Code, status) keeps what the partner has. The file's contact persons are added when the
+// partner doesn't have them yet; contacts missing from the file are never deleted.
+func importUpdateMitraTx(tx *gorm.DB, existing *model.Mitra, dto *domain.CreateMitraDTO, actorID string) error {
+	upd := &domain.UpdateMitraDTO{
+		Type:        dto.Type,
+		Name:        dto.Name,
+		ContactName: dto.ContactName,
+		Email:       dto.Email,
+		Phone:       dto.Phone,
+		Npwp:        strings.TrimSpace(dto.Npwp),
+		IsActive:    dto.IsActive,
+	}
+	if a := dto.Address; strings.TrimSpace(a) != "" {
+		upd.Address = &a
+	}
+	if c := strings.TrimSpace(dto.LinkedCompanyCode); c != "" {
+		upd.LinkedCompanyCode = &c
+	}
+	if err := updateMitraTx(tx, existing, upd, actorID); err != nil {
+		return err
+	}
+	for _, c := range dto.ContactPersons {
+		same, err := findEqualContact(tx, existing.ID, strings.TrimSpace(c.Name), strings.TrimSpace(c.Email), strings.TrimSpace(c.Phone))
+		if err != nil {
+			return err
+		}
+		if same != nil {
+			continue
+		}
+		if !dto.ContactPerms.Create {
+			return &contactdomain.ErrForbidden{Action: "add"}
+		}
+		if _, err := createContact(tx, existing.CompanyID, existing.ID, actorID, contactdomain.Input{Name: c.Name, Position: c.Position, Phone: c.Phone, Email: c.Email}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ImportExistingCodes — which of these partner codes (lower-cased) the company already uses.
+func (r *MitraRepository) ImportExistingCodes(companyID string, codes []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	lower := make([]string, 0, len(codes))
+	for _, c := range codes {
+		if c = strings.ToLower(strings.TrimSpace(c)); c != "" {
+			lower = append(lower, c)
+		}
+	}
+	if len(lower) == 0 {
+		return out, nil
+	}
+	var found []string
+	if err := r.db.Model(&model.Mitra{}).Where("company_id = ? AND lower(code) IN ?", companyID, lower).
+		Pluck("lower(code)", &found).Error; err != nil {
+		return nil, fmt.Errorf("existing partner codes: %w", err)
+	}
+	for _, c := range found {
+		out[c] = true
 	}
 	return out, nil
 }
@@ -147,52 +253,56 @@ func (r *MitraRepository) Update(companyID, id string, dto *domain.UpdateMitraDT
 	if err != nil {
 		return nil, err
 	}
-
-	updates := mitraUpdateMap(dto, actorID)
-	err = r.db.Transaction(func(tx *gorm.DB) error {
-		if c := strings.TrimSpace(dto.Code); c != "" && c != before.Code {
-			code, err := claimMitraCode(tx, companyID, c, id)
-			if err != nil {
-				return err
-			}
-			updates["code"] = code
-		}
-		if dto.LinkedCompanyCode != nil && !strings.EqualFold(strings.TrimSpace(*dto.LinkedCompanyCode), before.LinkedCompanyCode) {
-			linkedID, linkedCode, err := resolveLinkedCompany(tx, companyID, *dto.LinkedCompanyCode, id)
-			if err != nil {
-				return err
-			}
-			updates["linked_company_id"] = linkedID
-			updates["linked_company_code"] = linkedCode
-		}
-		if dto.ContactPersons != nil {
-			if err := lockMitra(tx, companyID, id); err != nil {
-				return err
-			}
-		}
-		if err := tx.Model(&model.Mitra{}).
-			Where("id = ? AND company_id = ?", id, companyID).
-			Updates(updates).Error; err != nil {
-			if uniqueViolationOn(err, "uq_mitra_company_linked_active") {
-				return &domain.ErrCompanyLinked{Code: fmt.Sprint(updates["linked_company_code"])}
-			}
-			if isUniqueViolation(err) {
-				return &domain.ErrCodeExists{Code: fmt.Sprint(updates["code"])}
-			}
-			return fmt.Errorf("update mitra %s: %w", id, err)
-		}
-		if dto.ContactPersons != nil {
-			if err := syncContacts(tx, companyID, id, actorID, dto.ContactPersons, dto.ContactPerms); err != nil {
-				return err
-			}
-		}
-		// Changed PIC details flow into the PIC contact (after the list sync, so it wins over stale rows).
-		return syncPICContact(tx, companyID, id, actorID, before, dto.ContactName, dto.Email, dto.Phone)
-	})
-	if err != nil {
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
+		return updateMitraTx(tx, before, dto, actorID)
+	}); err != nil {
 		return nil, mapContactErr(err)
 	}
 	return r.FindByID(companyID, id)
+}
+
+// updateMitraTx — the whole edit of `before` inside tx (shared by Update and the import).
+func updateMitraTx(tx *gorm.DB, before *model.Mitra, dto *domain.UpdateMitraDTO, actorID string) error {
+	companyID, id := before.CompanyID, before.ID
+	updates := mitraUpdateMap(dto, actorID)
+	if c := strings.TrimSpace(dto.Code); c != "" && c != before.Code {
+		code, err := claimMitraCode(tx, companyID, c, id)
+		if err != nil {
+			return err
+		}
+		updates["code"] = code
+	}
+	if dto.LinkedCompanyCode != nil && !strings.EqualFold(strings.TrimSpace(*dto.LinkedCompanyCode), before.LinkedCompanyCode) {
+		linkedID, linkedCode, err := resolveLinkedCompany(tx, companyID, *dto.LinkedCompanyCode, id)
+		if err != nil {
+			return err
+		}
+		updates["linked_company_id"] = linkedID
+		updates["linked_company_code"] = linkedCode
+	}
+	if dto.ContactPersons != nil {
+		if err := lockMitra(tx, companyID, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Model(&model.Mitra{}).
+		Where("id = ? AND company_id = ?", id, companyID).
+		Updates(updates).Error; err != nil {
+		if uniqueViolationOn(err, "uq_mitra_company_linked_active") {
+			return &domain.ErrCompanyLinked{Code: fmt.Sprint(updates["linked_company_code"])}
+		}
+		if isUniqueViolation(err) {
+			return &domain.ErrCodeExists{Code: fmt.Sprint(updates["code"])}
+		}
+		return fmt.Errorf("update mitra %s: %w", id, err)
+	}
+	if dto.ContactPersons != nil {
+		if err := syncContacts(tx, companyID, id, actorID, dto.ContactPersons, dto.ContactPerms); err != nil {
+			return err
+		}
+	}
+	// Changed PIC details flow into the PIC contact (after the list sync, so it wins over stale rows).
+	return syncPICContact(tx, companyID, id, actorID, before, dto.ContactName, dto.Email, dto.Phone)
 }
 
 func mitraUpdateMap(dto *domain.UpdateMitraDTO, actorID string) map[string]interface{} {

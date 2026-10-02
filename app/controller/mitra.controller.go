@@ -61,27 +61,33 @@ func (ctrl *MitraController) Import(c *fiber.Ctx) error {
 
 	perms := contactPerms(c)
 	var msgs []string
-	dtos := make([]*domain.CreateMitraDTO, 0, len(body.Partners))
 	for i := range body.Partners {
 		p := &body.Partners[i]
 		for _, m := range validation.Struct(&p.CreateMitraDTO) {
 			msgs = append(msgs, fmt.Sprintf("Row %d: %s", p.Row, m))
 		}
 		p.ContactPerms = perms
-		dtos = append(dtos, &p.CreateMitraDTO)
 	}
 	if msgs != nil {
 		return utils.ValidationFailed(c, msgs)
 	}
 
-	created, err := ctrl.svc.Import(middlewares.GetCompanyID(c), middlewares.GetUserID(c), dtos)
+	created, err := ctrl.svc.Import(middlewares.GetCompanyID(c), middlewares.GetUserID(c), body.Partners)
 	if err != nil {
 		return handleMitraError(c, err)
 	}
-	for _, m := range created {
+	added, updated := 0, 0
+	for _, res := range created {
+		m := res.Mitra
+		if res.Updated {
+			updated++
+			ctrl.doc.record(c, audit.ActionUpdated, m.ID, m.Name, "Updated partner "+m.Name+" from an import", nil)
+			continue
+		}
+		added++
 		ctrl.doc.record(c, audit.ActionCreated, m.ID, m.Name, "Imported partner "+m.Name, nil)
 	}
-	return utils.Created(c, fiber.Map{"created": len(created)}, fmt.Sprintf("%d partners imported", len(created)))
+	return utils.Created(c, fiber.Map{"created": added, "updated": updated}, importSummary(added, updated, "partner"))
 }
 
 func (ctrl *MitraController) List(c *fiber.Ctx) error {
@@ -224,6 +230,10 @@ func contactPerms(c *fiber.Ctx) contactdomain.Perms {
 func handleMitraError(c *fiber.Ctx, err error) error {
 	if handled, resp := handleActivationError(c, err); handled {
 		return resp
+	}
+	var importErrs *utils.ImportErrors
+	if errors.As(err, &importErrs) {
+		return utils.ValidationFailed(c, importErrs.Messages)
 	}
 	var forbidden *contactdomain.ErrForbidden
 	if errors.As(err, &forbidden) {

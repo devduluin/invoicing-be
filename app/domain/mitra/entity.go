@@ -1,6 +1,9 @@
 package domain_mitra
 
-import contactdomain "duluin_invoice/app/domain/contactperson"
+import (
+	contactdomain "duluin_invoice/app/domain/contactperson"
+	"duluin_invoice/app/model"
+)
 
 // CreateMitraDTO is the create payload for a Mitra (PRD §8).
 type CreateMitraDTO struct {
@@ -34,6 +37,19 @@ type ImportMitraRow struct {
 // ImportMitraDTO — POST /mitra/import. Saved all-or-nothing.
 type ImportMitraDTO struct {
 	Partners []ImportMitraRow `json:"partners"`
+}
+
+// ImportMitraItem — one partner to save in an import, with the label its error messages start with.
+type ImportMitraItem struct {
+	Label string
+	DTO   *CreateMitraDTO
+}
+
+// ImportMitraResult — a partner the import saved: created, or (Updated) the existing partner with the
+// same code, updated from the file.
+type ImportMitraResult struct {
+	Mitra   *model.Mitra
+	Updated bool
 }
 
 // MaxImportPartners caps one import file.

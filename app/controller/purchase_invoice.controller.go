@@ -113,10 +113,17 @@ func (ctrl *PurchaseInvoiceController) Import(c *fiber.Ctx) error {
 	if err != nil {
 		return purchaseInvoiceErr(c, err)
 	}
+	added, updated := 0, 0
 	for _, inv := range created {
+		if inv.Updated {
+			updated++
+			ctrl.doc.record(c, audit.ActionUpdated, inv.ID, inv.Number, "Updated "+inv.Number+" from an import", nil)
+			continue
+		}
+		added++
 		ctrl.doc.record(c, audit.ActionCreated, inv.ID, inv.Number, "Imported "+inv.Number, nil)
 	}
-	return utils.Created(c, fiber.Map{"created": len(created), "invoices": created}, fmt.Sprintf("%d invoices imported", len(created)))
+	return utils.Created(c, fiber.Map{"created": added, "updated": updated, "invoices": created}, importSummary(added, updated, "invoice"))
 }
 
 func (ctrl *PurchaseInvoiceController) Update(c *fiber.Ctx) error {
@@ -251,6 +258,10 @@ func (ctrl *PurchaseInvoiceController) Cancel(c *fiber.Ctx) error {
 func purchaseInvoiceErr(c *fiber.Ctx, err error) error {
 	if handled, resp := handleActivationError(c, err); handled {
 		return resp
+	}
+	var importErrs *utils.ImportErrors
+	if errors.As(err, &importErrs) {
+		return utils.ValidationFailed(c, importErrs.Messages)
 	}
 	var nf *domain.ErrNotFound
 	if errors.As(err, &nf) {

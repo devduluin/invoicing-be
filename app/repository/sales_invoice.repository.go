@@ -43,25 +43,145 @@ func (r *SalesInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Lines
 }
 
 // CreateMany — the import: every invoice in ONE transaction, so a file lands completely or not at all.
-// Returns the created invoices' ids and numbers, in order.
-func (r *SalesInvoiceRepository) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+// Each invoice runs under its own savepoint: one the data refuses (number in use, bad date, invalid
+// contact / salesperson) is rolled back to it and the rest still get checked, so every problem of
+// the file comes back at once (*utils.ImportErrors). Returns the created ids and numbers, in order.
+//
+// prior — problems the caller already found in other rows: the file is still checked here, then
+// everything is rolled back and returned together with them.
+func (r *SalesInvoiceRepository) ImportMany(items []domain.ImportItem, actorID string, prior []string) ([]domain.ImportCreated, error) {
 	out := make([]domain.ImportCreated, 0, len(items))
+	msgs := append([]string(nil), prior...)
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		for _, it := range items {
-			id, err := createSalesInvoiceTx(tx, it.DTO, it.Calc, actorID)
-			if err != nil {
+		for i, it := range items {
+			sp := fmt.Sprintf("import_invoice_%d", i)
+			if err := tx.SavePoint(sp).Error; err != nil {
 				return err
+			}
+			id, updated, err := importSalesInvoiceTx(tx, it, actorID)
+			if err != nil {
+				var invalid *domain.ErrValidation
+				var dup *domain.ErrNumberExists
+				if !errors.As(err, &invalid) && !errors.As(err, &dup) {
+					return err
+				}
+				if err := tx.RollbackTo(sp).Error; err != nil {
+					return err
+				}
+				msgs = append(msgs, fmt.Sprintf("Row %d: %s", it.Row, err.Error()))
+				continue
 			}
 			var number string
 			if err := tx.Model(&model.SalesInvoice{}).Where("id = ?", id).Pluck("number", &number).Error; err != nil {
 				return fmt.Errorf("read sales invoice number: %w", err)
 			}
-			out = append(out, domain.ImportCreated{ID: id, Number: number})
+			out = append(out, domain.ImportCreated{ID: id, Number: number, Updated: updated})
+		}
+		if msgs != nil {
+			return &utils.ImportErrors{Messages: msgs}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// importSalesInvoiceTx saves one invoice of an import file: a number the company already has updates that
+// invoice (drafts only, the same edit as the form), any other number creates a new one.
+func importSalesInvoiceTx(tx *gorm.DB, it domain.ImportItem, actorID string) (string, bool, error) {
+	d := it.DTO
+	if number := strings.TrimSpace(d.Number); number != "" {
+		var e model.SalesInvoice
+		err := tx.Where("company_id = ? AND lower(number) = lower(?)", d.CompanyID, number).First(&e).Error
+		if err == nil {
+			if e.Kind != model.SalesInvoiceKindInvoice {
+				return "", false, &domain.ErrValidation{Message: fmt.Sprintf("no. %s is a down payment, it can't be updated by import", e.Number)}
+			}
+			if e.Status != model.SalesInvoiceStatusDraft {
+				return "", false, &domain.ErrValidation{Message: fmt.Sprintf("invoice %s is already %s; only draft invoices can be updated by import", e.Number, e.Status)}
+			}
+			return e.ID, true, updateSalesInvoiceTx(tx, &e, salesInvoiceImportUpdate(&e, it), it.Calc, actorID)
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, fmt.Errorf("find sales invoice %s: %w", number, err)
+		}
+	}
+	id, err := createSalesInvoiceTx(tx, d, it.Calc, actorID)
+	return id, false, err
+}
+
+// salesInvoiceImportUpdate — the edit an import row makes to an existing draft: partner, dates, lines
+// and amounts come from the file; a text cell left blank keeps what the invoice already has; what a
+// file can't carry (source order, linked invoice, contact, attachment, signature, template) is kept.
+func salesInvoiceImportUpdate(e *model.SalesInvoice, it domain.ImportItem) *domain.UpdateDTO {
+	d := it.DTO
+	u := &domain.UpdateDTO{
+		SalesOrderID:            e.SalesOrderID,
+		LinkedInvoiceID:         e.LinkedInvoiceID,
+		MitraID:                 d.MitraID,
+		Number:                  e.Number,
+		Date:                    d.Date,
+		DueDate:                 d.DueDate,
+		RefNo:                   keepIfBlank(d.RefNo, e.RefNo),
+		Notes:                   keepIfBlank(d.Notes, e.Notes),
+		Terms:                   keepIfBlank(d.Terms, e.Terms),
+		PaymentTerm:             keepIfBlank(d.PaymentTerm, e.PaymentTerm),
+		AdditionalDiscountType:  d.AdditionalDiscountType,
+		AdditionalDiscountValue: d.AdditionalDiscountValue,
+		ShippingCost:            d.ShippingCost,
+		ShipFrom:                keepIfBlank(d.ShipFrom, e.ShipFrom),
+		Salesperson:             e.Salesperson,
+		SalespersonID:           e.SalespersonID,
+		AttachmentData:          e.AttachmentData,
+		AttachmentName:          e.AttachmentName,
+		SignatureData:           e.SignatureData,
+		StampDuty:               e.StampDuty,
+		Lines:                   d.Lines,
+	}
+	if derefStr(d.SalespersonID) != "" {
+		u.SalespersonID, u.Salesperson = d.SalespersonID, ""
+	}
+	if d.MitraID == e.MitraID {
+		u.ContactPersonID = e.ContactPersonID
+	}
+	if it.KeepNotes {
+		u.Notes = e.Notes
+	}
+	if it.KeepTerms {
+		u.Terms = e.Terms
+	}
+	return u
+}
+
+// keepIfBlank — an import cell left blank keeps the current value.
+func keepIfBlank(v, current string) string {
+	if strings.TrimSpace(v) == "" {
+		return current
+	}
+	return v
+}
+
+// ImportExistingNumbers — which of these numbers (lower-cased) the company already uses.
+func (r *SalesInvoiceRepository) ImportExistingNumbers(companyID string, numbers []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	lower := make([]string, 0, len(numbers))
+	for _, n := range numbers {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			lower = append(lower, n)
+		}
+	}
+	if len(lower) == 0 {
+		return out, nil
+	}
+	var found []string
+	if err := r.db.Model(&model.SalesInvoice{}).Where("company_id = ? AND lower(number) IN ?", companyID, lower).
+		Pluck("lower(number)", &found).Error; err != nil {
+		return nil, fmt.Errorf("existing sales invoice numbers: %w", err)
+	}
+	for _, n := range found {
+		out[n] = true
 	}
 	return out, nil
 }
@@ -196,22 +316,33 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 	if err != nil {
 		return nil, err
 	}
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
+		return updateSalesInvoiceTx(tx, existing, dto, calc, actorID)
+	}); err != nil {
+		return nil, err
+	}
+	return r.FindByID(companyID, id)
+}
+
+// updateSalesInvoiceTx — the whole edit of `existing` inside tx (shared by Update and the import).
+func updateSalesInvoiceTx(tx *gorm.DB, existing *model.SalesInvoice, dto *domain.UpdateDTO, calc *utils.LinesCalc, actorID string) error {
+	companyID, id := existing.CompanyID, existing.ID
 	// A paid invoice can be edited, but never down to less than what was already settled — that would
 	// leave a negative balance (money received for an amount the invoice no longer asks for).
 	if settled := round2(existing.PaidAmount + existing.AppliedDPAmount); calc.GrandTotal+0.005 < settled {
-		return nil, &domain.ErrValidation{Message: fmt.Sprintf("the total can't be lower than the %.2f already paid or covered by down payments", settled)}
+		return &domain.ErrValidation{Message: fmt.Sprintf("the total can't be lower than the %.2f already paid or covered by down payments", settled)}
 	}
 
 	date, err := parseSalesInvoiceDate(dto.Date)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	dueDate, err := parseOptionalSalesInvoiceDate(dto.DueDate)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if dueDate != nil && dueDate.Before(date) {
-		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+		return &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
 	}
 
 	number := strings.TrimSpace(dto.Number)
@@ -219,130 +350,124 @@ func (r *SalesInvoiceRepository) Update(companyID, id string, dto *domain.Update
 		number = existing.Number
 	}
 	if !strings.EqualFold(number, existing.Number) {
-		if exists, err := r.numberExists(companyID, number, id); err != nil {
-			return nil, err
+		if exists, err := salesInvoiceNumberExists(tx, companyID, number, id); err != nil {
+			return err
 		} else if exists {
-			return nil, &domain.ErrNumberExists{Number: number}
+			return &domain.ErrNumberExists{Number: number}
 		}
 	}
 
-	err = r.db.Transaction(func(tx *gorm.DB) error {
-		linked := trimPtr(dto.LinkedInvoiceID)
-		if existing.Kind == model.SalesInvoiceKindDownPayment && linked == nil {
-			target, err := invoiceOfOrder(tx, companyID, trimPtr(dto.SalesOrderID))
-			if err != nil {
-				return err
-			}
-			linked = target
-		}
-		if err := checkSalesInvoiceLinks(tx, companyID, id, existing.Kind, trimPtr(dto.SalesOrderID), linked, calc.GrandTotal); err != nil {
+	linked := trimPtr(dto.LinkedInvoiceID)
+	if existing.Kind == model.SalesInvoiceKindDownPayment && linked == nil {
+		target, err := invoiceOfOrder(tx, companyID, trimPtr(dto.SalesOrderID))
+		if err != nil {
 			return err
 		}
-		updates := map[string]any{
-			"sales_order_id":             trimPtr(dto.SalesOrderID),
-			"linked_invoice_id":          linked,
-			"mitra_id":                   dto.MitraID,
-			"number":                     number,
-			"date":                       date,
-			"due_date":                   dueDate,
-			"ref_no":                     strings.TrimSpace(dto.RefNo),
-			"payment_term":               dto.PaymentTerm,
-			"notes":                      utils.SanitizeRichText(dto.Notes),
-			"terms":                      utils.SanitizeRichText(dto.Terms),
-			"subtotal":                   calc.Subtotal,
-			"discount_total":             calc.DiscountTotal,
-			"tax_total":                  calc.TaxTotal,
-			"grand_total":                calc.GrandTotal,
-			"additional_discount_type":   calc.AdditionalDiscountType,
-			"additional_discount_value":  calc.AdditionalDiscountValue,
-			"additional_discount_amount": calc.AdditionalDiscountAmount,
-			"shipping_cost":              dto.ShippingCost,
-			"ship_from":                  strings.TrimSpace(dto.ShipFrom),
-			"attachment_data":            dto.AttachmentData,
-			"attachment_name":            strings.TrimSpace(dto.AttachmentName),
-			"signature_data":             dto.SignatureData,
-			"stamp_duty":                 dto.StampDuty,
-			"updated_at":                 time.Now(),
-			"updated_by":                 actorID,
-		}
-		// A client that doesn't send `template` must not reset the saved choice.
-		if strings.TrimSpace(dto.Template) != "" {
-			updates["template"] = strings.TrimSpace(dto.Template)
-		}
-		// Same salesperson as before: its name snapshot stays as it was (an issued document never
-		// changes because the master was renamed); another one (or none) is snapshotted afresh.
-		if sid := derefStr(dto.SalespersonID); sid == "" || sid != derefStr(existing.SalespersonID) {
-			spID, spName, err := salespersonSnapshot(tx, companyID, dto.SalespersonID, dto.Salesperson, derefStr(existing.SalespersonID))
-			if err != nil {
-				var sp *errSalesperson
-				if errors.As(err, &sp) {
-					return &domain.ErrValidation{Message: err.Error()}
-				}
-				return err
-			}
-			updates["salesperson_id"], updates["salesperson"] = spID, spName
-		}
-		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
+		linked = target
+	}
+	if err := checkSalesInvoiceLinks(tx, companyID, id, existing.Kind, trimPtr(dto.SalesOrderID), linked, calc.GrandTotal); err != nil {
+		return err
+	}
+	updates := map[string]any{
+		"sales_order_id":             trimPtr(dto.SalesOrderID),
+		"linked_invoice_id":          linked,
+		"mitra_id":                   dto.MitraID,
+		"number":                     number,
+		"date":                       date,
+		"due_date":                   dueDate,
+		"ref_no":                     strings.TrimSpace(dto.RefNo),
+		"payment_term":               dto.PaymentTerm,
+		"notes":                      utils.SanitizeRichText(dto.Notes),
+		"terms":                      utils.SanitizeRichText(dto.Terms),
+		"subtotal":                   calc.Subtotal,
+		"discount_total":             calc.DiscountTotal,
+		"tax_total":                  calc.TaxTotal,
+		"grand_total":                calc.GrandTotal,
+		"additional_discount_type":   calc.AdditionalDiscountType,
+		"additional_discount_value":  calc.AdditionalDiscountValue,
+		"additional_discount_amount": calc.AdditionalDiscountAmount,
+		"shipping_cost":              dto.ShippingCost,
+		"ship_from":                  strings.TrimSpace(dto.ShipFrom),
+		"attachment_data":            dto.AttachmentData,
+		"attachment_name":            strings.TrimSpace(dto.AttachmentName),
+		"signature_data":             dto.SignatureData,
+		"stamp_duty":                 dto.StampDuty,
+		"updated_at":                 time.Now(),
+		"updated_by":                 actorID,
+	}
+	// A client that doesn't send `template` must not reset the saved choice.
+	if strings.TrimSpace(dto.Template) != "" {
+		updates["template"] = strings.TrimSpace(dto.Template)
+	}
+	// Same salesperson as before: its name snapshot stays as it was (an issued document never
+	// changes because the master was renamed); another one (or none) is snapshotted afresh.
+	if sid := derefStr(dto.SalespersonID); sid == "" || sid != derefStr(existing.SalespersonID) {
+		spID, spName, err := salespersonSnapshot(tx, companyID, dto.SalespersonID, dto.Salesperson, derefStr(existing.SalespersonID))
 		if err != nil {
-			if errors.Is(err, errContactInvalid) {
+			var sp *errSalesperson
+			if errors.As(err, &sp) {
 				return &domain.ErrValidation{Message: err.Error()}
 			}
 			return err
 		}
-		if !snap.Keep {
-			updates["contact_person_id"] = snap.ID
-			updates["contact_name"] = snap.Name
-			updates["contact_position"] = snap.Position
-			updates["contact_phone"] = snap.Phone
-			updates["contact_email"] = snap.Email
+		updates["salesperson_id"], updates["salesperson"] = spID, spName
+	}
+	snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
+	if err != nil {
+		if errors.Is(err, errContactInvalid) {
+			return &domain.ErrValidation{Message: err.Error()}
 		}
-		if err := tx.Model(&model.SalesInvoice{}).
-			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
-			return fmt.Errorf("update sales invoice %s: %w", id, err)
+		return err
+	}
+	if !snap.Keep {
+		updates["contact_person_id"] = snap.ID
+		updates["contact_name"] = snap.Name
+		updates["contact_position"] = snap.Position
+		updates["contact_phone"] = snap.Phone
+		updates["contact_email"] = snap.Email
+	}
+	if err := tx.Model(&model.SalesInvoice{}).
+		Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
+		return fmt.Errorf("update sales invoice %s: %w", id, err)
+	}
+	// The total, the source order or the linked invoice may have changed: rebuild the derived
+	// balance of this invoice, and of the invoice a down payment used to / now points at.
+	if existing.Kind == model.SalesInvoiceKindInvoice {
+		if err := adoptSalesOrderDownPayments(tx, companyID, id, trimPtr(dto.SalesOrderID)); err != nil {
+			return err
 		}
-		// The total, the source order or the linked invoice may have changed: rebuild the derived
-		// balance of this invoice, and of the invoice a down payment used to / now points at.
-		if existing.Kind == model.SalesInvoiceKindInvoice {
-			if err := adoptSalesOrderDownPayments(tx, companyID, id, trimPtr(dto.SalesOrderID)); err != nil {
-				return err
-			}
-			if err := adoptReferencedDownPayment(tx, companyID, id, linked); err != nil {
-				return err
-			}
-			if err := syncSalesInvoiceBalance(tx, companyID, id); err != nil {
-				return err
-			}
-		} else {
-			for _, target := range []*string{existing.LinkedInvoiceID, linked} {
-				if target != nil {
-					if err := syncSalesInvoiceBalance(tx, companyID, *target); err != nil {
-						return err
-					}
+		if err := adoptReferencedDownPayment(tx, companyID, id, linked); err != nil {
+			return err
+		}
+		if err := syncSalesInvoiceBalance(tx, companyID, id); err != nil {
+			return err
+		}
+	} else {
+		for _, target := range []*string{existing.LinkedInvoiceID, linked} {
+			if target != nil {
+				if err := syncSalesInvoiceBalance(tx, companyID, *target); err != nil {
+					return err
 				}
 			}
 		}
-		if err := deleteSalesInvoiceLineTaxes(tx, id); err != nil {
-			return err
-		}
-		if err := tx.Where("sales_invoice_id = ?", id).Delete(&model.SalesInvoiceLine{}).Error; err != nil {
-			return fmt.Errorf("clear sales invoice lines %s: %w", id, err)
-		}
-		lines := buildSalesInvoiceLines(calc.Lines, companyID, id)
-		if err := tx.Create(&lines).Error; err != nil {
-			return fmt.Errorf("create sales invoice lines %s: %w", id, err)
-		}
-		lineTaxes := buildSalesInvoiceLineTaxes(lines, calc.Lines)
-		if len(lineTaxes) > 0 {
-			if err := tx.Create(&lineTaxes).Error; err != nil {
-				return fmt.Errorf("create sales invoice line taxes %s: %w", id, err)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return r.FindByID(companyID, id)
+	if err := deleteSalesInvoiceLineTaxes(tx, id); err != nil {
+		return err
+	}
+	if err := tx.Where("sales_invoice_id = ?", id).Delete(&model.SalesInvoiceLine{}).Error; err != nil {
+		return fmt.Errorf("clear sales invoice lines %s: %w", id, err)
+	}
+	lines := buildSalesInvoiceLines(calc.Lines, companyID, id)
+	if err := tx.Create(&lines).Error; err != nil {
+		return fmt.Errorf("create sales invoice lines %s: %w", id, err)
+	}
+	lineTaxes := buildSalesInvoiceLineTaxes(lines, calc.Lines)
+	if len(lineTaxes) > 0 {
+		if err := tx.Create(&lineTaxes).Error; err != nil {
+			return fmt.Errorf("create sales invoice line taxes %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func (r *SalesInvoiceRepository) FindByID(companyID, id string) (*model.SalesInvoice, error) {

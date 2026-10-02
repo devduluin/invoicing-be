@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,10 +14,11 @@ import (
 // fakeSalesInvoiceRepo — a small hand-written stand-in for domain.IRepository
 // (same style as fakeSalesOrderRepo/fakeReportRepo).
 type fakeSalesInvoiceRepo struct {
-	invoice     *model.SalesInvoice
-	taxRates    map[string]utils.TaxRate
-	mitraExists bool
-	imported    []domain.ImportItem
+	existingNumbers map[string]bool
+	invoice         *model.SalesInvoice
+	taxRates        map[string]utils.TaxRate
+	mitraExists     bool
+	imported        []domain.ImportItem
 }
 
 func (f *fakeSalesInvoiceRepo) Create(dto *domain.CreateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error) {
@@ -57,7 +59,20 @@ func (f *fakeSalesInvoiceRepo) TaxRates(companyID string, taxIDs []string) (map[
 	return f.taxRates, nil
 }
 
-func (f *fakeSalesInvoiceRepo) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+func (f *fakeSalesInvoiceRepo) ImportExistingNumbers(companyID string, numbers []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, n := range numbers {
+		if f.existingNumbers[strings.ToLower(n)] {
+			out[strings.ToLower(n)] = true
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeSalesInvoiceRepo) ImportMany(items []domain.ImportItem, actorID string, prior []string) ([]domain.ImportCreated, error) {
+	if len(prior) > 0 { // like the real one: checked, rolled back, returned together
+		return nil, &utils.ImportErrors{Messages: prior}
+	}
 	f.imported = items
 	out := make([]domain.ImportCreated, len(items))
 	for i, it := range items {
@@ -111,6 +126,24 @@ func TestSalesInvoiceImport(t *testing.T) {
 		svc = &SalesInvoiceService{repo: &fakeSalesInvoiceRepo{}, activation: &fakeTxnLimiter{capacity: 10}}
 		if _, err := svc.Import("c1", "actor", []domain.ImportRow{row(3, "")}); err == nil || err.Error() != "Row 3: partner not found" {
 			t.Fatalf("got %v", err)
+		}
+	})
+
+	t.Run("reports every problem of the file together and saves nothing", func(t *testing.T) {
+		repo := &fakeSalesInvoiceRepo{}
+		svc := &SalesInvoiceService{repo: repo, activation: &fakeTxnLimiter{capacity: 10}}
+		_, err := svc.Import("c1", "actor", []domain.ImportRow{row(3, "INV/1"), row(4, "inv/1")})
+		var all *utils.ImportErrors
+		if !errors.As(err, &all) || len(all.Messages) != 3 || repo.imported != nil {
+			t.Fatalf("want 3 problems (2 missing partners + 1 duplicate number) and nothing saved, got %v", err)
+		}
+	})
+
+	t.Run("a number the company already has is an update, not counted against the monthly cap", func(t *testing.T) {
+		repo := &fakeSalesInvoiceRepo{mitraExists: true, existingNumbers: map[string]bool{"inv/1": true}}
+		svc := &SalesInvoiceService{repo: repo, activation: &fakeTxnLimiter{capacity: 1}}
+		if _, err := svc.Import("c1", "actor", []domain.ImportRow{row(2, "INV/1"), row(3, "INV/2")}); err != nil {
+			t.Fatalf("1 update + 1 new fits a cap of 1, got %v", err)
 		}
 	})
 

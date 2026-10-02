@@ -43,25 +43,123 @@ func (r *PurchaseInvoiceRepository) Create(dto *domain.CreateDTO, calc *utils.Li
 }
 
 // CreateMany — the import: every invoice in ONE transaction, so a file lands completely or not at all.
-// Returns the created invoices' ids and numbers, in order.
-func (r *PurchaseInvoiceRepository) CreateMany(items []domain.ImportItem, actorID string) ([]domain.ImportCreated, error) {
+// Each invoice runs under its own savepoint: one the data refuses (number in use, bad date, invalid
+// contact / salesperson) is rolled back to it and the rest still get checked, so every problem of
+// the file comes back at once (*utils.ImportErrors). Returns the created ids and numbers, in order.
+//
+// prior — problems the caller already found in other rows: the file is still checked here, then
+// everything is rolled back and returned together with them.
+func (r *PurchaseInvoiceRepository) ImportMany(items []domain.ImportItem, actorID string, prior []string) ([]domain.ImportCreated, error) {
 	out := make([]domain.ImportCreated, 0, len(items))
+	msgs := append([]string(nil), prior...)
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		for _, it := range items {
-			id, err := createPurchaseInvoiceTx(tx, it.DTO, it.Calc, actorID)
-			if err != nil {
+		for i, it := range items {
+			sp := fmt.Sprintf("import_invoice_%d", i)
+			if err := tx.SavePoint(sp).Error; err != nil {
 				return err
+			}
+			id, updated, err := importPurchaseInvoiceTx(tx, it, actorID)
+			if err != nil {
+				var invalid *domain.ErrValidation
+				var dup *domain.ErrNumberExists
+				if !errors.As(err, &invalid) && !errors.As(err, &dup) {
+					return err
+				}
+				if err := tx.RollbackTo(sp).Error; err != nil {
+					return err
+				}
+				msgs = append(msgs, fmt.Sprintf("Row %d: %s", it.Row, err.Error()))
+				continue
 			}
 			var number string
 			if err := tx.Model(&model.PurchaseInvoice{}).Where("id = ?", id).Pluck("number", &number).Error; err != nil {
 				return fmt.Errorf("read purchase invoice number: %w", err)
 			}
-			out = append(out, domain.ImportCreated{ID: id, Number: number})
+			out = append(out, domain.ImportCreated{ID: id, Number: number, Updated: updated})
+		}
+		if msgs != nil {
+			return &utils.ImportErrors{Messages: msgs}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// importPurchaseInvoiceTx saves one invoice of an import file: a number the company already has updates that
+// invoice (drafts only, the same edit as the form), any other number creates a new one.
+func importPurchaseInvoiceTx(tx *gorm.DB, it domain.ImportItem, actorID string) (string, bool, error) {
+	d := it.DTO
+	if number := strings.TrimSpace(d.Number); number != "" {
+		var e model.PurchaseInvoice
+		err := tx.Where("company_id = ? AND lower(number) = lower(?)", d.CompanyID, number).First(&e).Error
+		if err == nil {
+			if e.Status != model.PurchaseInvoiceStatusDraft {
+				return "", false, &domain.ErrValidation{Message: fmt.Sprintf("invoice %s is already %s; only draft invoices can be updated by import", e.Number, e.Status)}
+			}
+			return e.ID, true, updatePurchaseInvoiceTx(tx, &e, purchaseInvoiceImportUpdate(&e, it), it.Calc, actorID)
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, fmt.Errorf("find purchase invoice %s: %w", number, err)
+		}
+	}
+	id, err := createPurchaseInvoiceTx(tx, d, it.Calc, actorID)
+	return id, false, err
+}
+
+// purchaseInvoiceImportUpdate — the edit an import row makes to an existing draft: partner, dates,
+// lines and amounts come from the file; a text cell left blank keeps what the invoice already has;
+// what a file can't carry (source order, contact, attachment, signature, template) is kept.
+func purchaseInvoiceImportUpdate(e *model.PurchaseInvoice, it domain.ImportItem) *domain.UpdateDTO {
+	d := it.DTO
+	u := &domain.UpdateDTO{
+		PurchaseOrderID:         e.PurchaseOrderID,
+		MitraID:                 d.MitraID,
+		Number:                  e.Number,
+		Date:                    d.Date,
+		DueDate:                 d.DueDate,
+		RefNo:                   keepIfBlank(d.RefNo, e.RefNo),
+		Notes:                   keepIfBlank(d.Notes, e.Notes),
+		AdditionalDiscountType:  d.AdditionalDiscountType,
+		AdditionalDiscountValue: d.AdditionalDiscountValue,
+		ShippingCost:            d.ShippingCost,
+		ShipTo:                  keepIfBlank(d.ShipTo, e.ShipTo),
+		AttachmentData:          e.AttachmentData,
+		AttachmentName:          e.AttachmentName,
+		SignatureData:           e.SignatureData,
+		StampDuty:               e.StampDuty,
+		Lines:                   d.Lines,
+	}
+	if d.MitraID == e.MitraID {
+		u.ContactPersonID = e.ContactPersonID
+	}
+	if it.KeepNotes {
+		u.Notes = e.Notes
+	}
+	return u
+}
+
+// ImportExistingNumbers — which of these numbers (lower-cased) the company already uses.
+func (r *PurchaseInvoiceRepository) ImportExistingNumbers(companyID string, numbers []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	lower := make([]string, 0, len(numbers))
+	for _, n := range numbers {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			lower = append(lower, n)
+		}
+	}
+	if len(lower) == 0 {
+		return out, nil
+	}
+	var found []string
+	if err := r.db.Model(&model.PurchaseInvoice{}).Where("company_id = ? AND lower(number) IN ?", companyID, lower).
+		Pluck("lower(number)", &found).Error; err != nil {
+		return nil, fmt.Errorf("existing purchase invoice numbers: %w", err)
+	}
+	for _, n := range found {
+		out[n] = true
 	}
 	return out, nil
 }
@@ -166,17 +264,28 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 	if err != nil {
 		return nil, err
 	}
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
+		return updatePurchaseInvoiceTx(tx, existing, dto, calc, actorID)
+	}); err != nil {
+		return nil, err
+	}
+	return r.FindByID(companyID, id)
+}
+
+// updatePurchaseInvoiceTx — the whole edit of `existing` inside tx (shared by Update and the import).
+func updatePurchaseInvoiceTx(tx *gorm.DB, existing *model.PurchaseInvoice, dto *domain.UpdateDTO, calc *utils.LinesCalc, actorID string) error {
+	companyID, id := existing.CompanyID, existing.ID
 
 	date, err := parsePurchaseInvoiceDate(dto.Date)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	dueDate, err := parseOptionalPurchaseInvoiceDate(dto.DueDate)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if dueDate != nil && dueDate.Before(date) {
-		return nil, &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
+		return &domain.ErrValidation{Message: "due date can't be earlier than the invoice date"}
 	}
 
 	number := strings.TrimSpace(dto.Number)
@@ -184,92 +293,86 @@ func (r *PurchaseInvoiceRepository) Update(companyID, id string, dto *domain.Upd
 		number = existing.Number
 	}
 	if !strings.EqualFold(number, existing.Number) {
-		if exists, err := r.numberExists(companyID, number, id); err != nil {
-			return nil, err
+		if exists, err := purchaseInvoiceNumberExists(tx, companyID, number, id); err != nil {
+			return err
 		} else if exists {
-			return nil, &domain.ErrNumberExists{Number: number}
+			return &domain.ErrNumberExists{Number: number}
 		}
 	}
-	if err := checkPurchaseInvoiceOrder(r.db, companyID, id, trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
-		return nil, err
+	if err := checkPurchaseInvoiceOrder(tx, companyID, id, trimPtr(dto.PurchaseOrderID), calc.GrandTotal); err != nil {
+		return err
 	}
 	if existing.PaidAmount > 0 && calc.GrandTotal+0.005 < round2(existing.PaidAmount) {
-		return nil, &domain.ErrValidation{Message: fmt.Sprintf("the total can't be lower than the %.2f already paid", round2(existing.PaidAmount))}
+		return &domain.ErrValidation{Message: fmt.Sprintf("the total can't be lower than the %.2f already paid", round2(existing.PaidAmount))}
 	}
 
-	err = r.db.Transaction(func(tx *gorm.DB) error {
-		updates := map[string]any{
-			"purchase_order_id":          trimPtr(dto.PurchaseOrderID),
-			"mitra_id":                   dto.MitraID,
-			"number":                     number,
-			"date":                       date,
-			"due_date":                   dueDate,
-			"ref_no":                     strings.TrimSpace(dto.RefNo),
-			"notes":                      utils.SanitizeRichText(dto.Notes),
-			"subtotal":                   calc.Subtotal,
-			"discount_total":             calc.DiscountTotal,
-			"tax_total":                  calc.TaxTotal,
-			"grand_total":                calc.GrandTotal,
-			"additional_discount_type":   calc.AdditionalDiscountType,
-			"additional_discount_value":  calc.AdditionalDiscountValue,
-			"additional_discount_amount": calc.AdditionalDiscountAmount,
-			"shipping_cost":              dto.ShippingCost,
-			"ship_to":                    strings.TrimSpace(dto.ShipTo),
-			"attachment_data":            dto.AttachmentData,
-			"attachment_name":            strings.TrimSpace(dto.AttachmentName),
-			"signature_data":             dto.SignatureData,
-			"stamp_duty":                 dto.StampDuty,
-			"updated_at":                 time.Now(),
-			"updated_by":                 actorID,
-		}
-		if t := strings.TrimSpace(dto.Template); t != "" {
-			updates["template"] = t
-		}
-		snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
-		if err != nil {
-			if errors.Is(err, errContactInvalid) {
-				return &domain.ErrValidation{Message: err.Error()}
-			}
-			return err
-		}
-		if !snap.Keep {
-			updates["contact_person_id"] = snap.ID
-			updates["contact_name"] = snap.Name
-			updates["contact_position"] = snap.Position
-			updates["contact_phone"] = snap.Phone
-			updates["contact_email"] = snap.Email
-		}
-
-		if err := tx.Model(&model.PurchaseInvoice{}).
-			Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
-			return fmt.Errorf("update purchase invoice %s: %w", id, err)
-		}
-		if err := deletePurchaseInvoiceLineTaxes(tx, id); err != nil {
-			return err
-		}
-		// The total may have changed: paid stays as recorded, so re-derive the payment status.
-		if err := refreshPurchaseInvoicePaymentStatus(tx, companyID, id); err != nil {
-			return err
-		}
-		if err := tx.Where("purchase_invoice_id = ?", id).Delete(&model.PurchaseInvoiceLine{}).Error; err != nil {
-			return fmt.Errorf("clear purchase invoice lines %s: %w", id, err)
-		}
-		lines := buildPurchaseInvoiceLines(calc.Lines, companyID, id)
-		if err := tx.Create(&lines).Error; err != nil {
-			return fmt.Errorf("create purchase invoice lines %s: %w", id, err)
-		}
-		lineTaxes := buildPurchaseInvoiceLineTaxes(lines, calc.Lines)
-		if len(lineTaxes) > 0 {
-			if err := tx.Create(&lineTaxes).Error; err != nil {
-				return fmt.Errorf("create purchase invoice line taxes %s: %w", id, err)
-			}
-		}
-		return nil
-	})
+	updates := map[string]any{
+		"purchase_order_id":          trimPtr(dto.PurchaseOrderID),
+		"mitra_id":                   dto.MitraID,
+		"number":                     number,
+		"date":                       date,
+		"due_date":                   dueDate,
+		"ref_no":                     strings.TrimSpace(dto.RefNo),
+		"notes":                      utils.SanitizeRichText(dto.Notes),
+		"subtotal":                   calc.Subtotal,
+		"discount_total":             calc.DiscountTotal,
+		"tax_total":                  calc.TaxTotal,
+		"grand_total":                calc.GrandTotal,
+		"additional_discount_type":   calc.AdditionalDiscountType,
+		"additional_discount_value":  calc.AdditionalDiscountValue,
+		"additional_discount_amount": calc.AdditionalDiscountAmount,
+		"shipping_cost":              dto.ShippingCost,
+		"ship_to":                    strings.TrimSpace(dto.ShipTo),
+		"attachment_data":            dto.AttachmentData,
+		"attachment_name":            strings.TrimSpace(dto.AttachmentName),
+		"signature_data":             dto.SignatureData,
+		"stamp_duty":                 dto.StampDuty,
+		"updated_at":                 time.Now(),
+		"updated_by":                 actorID,
+	}
+	if t := strings.TrimSpace(dto.Template); t != "" {
+		updates["template"] = t
+	}
+	snap, err := contactSnapshot(tx, companyID, dto.MitraID, dto.ContactPersonID, derefStr(existing.ContactPersonID))
 	if err != nil {
-		return nil, err
+		if errors.Is(err, errContactInvalid) {
+			return &domain.ErrValidation{Message: err.Error()}
+		}
+		return err
 	}
-	return r.FindByID(companyID, id)
+	if !snap.Keep {
+		updates["contact_person_id"] = snap.ID
+		updates["contact_name"] = snap.Name
+		updates["contact_position"] = snap.Position
+		updates["contact_phone"] = snap.Phone
+		updates["contact_email"] = snap.Email
+	}
+
+	if err := tx.Model(&model.PurchaseInvoice{}).
+		Where("id = ? AND company_id = ?", id, companyID).Updates(updates).Error; err != nil {
+		return fmt.Errorf("update purchase invoice %s: %w", id, err)
+	}
+	if err := deletePurchaseInvoiceLineTaxes(tx, id); err != nil {
+		return err
+	}
+	// The total may have changed: paid stays as recorded, so re-derive the payment status.
+	if err := refreshPurchaseInvoicePaymentStatus(tx, companyID, id); err != nil {
+		return err
+	}
+	if err := tx.Where("purchase_invoice_id = ?", id).Delete(&model.PurchaseInvoiceLine{}).Error; err != nil {
+		return fmt.Errorf("clear purchase invoice lines %s: %w", id, err)
+	}
+	lines := buildPurchaseInvoiceLines(calc.Lines, companyID, id)
+	if err := tx.Create(&lines).Error; err != nil {
+		return fmt.Errorf("create purchase invoice lines %s: %w", id, err)
+	}
+	lineTaxes := buildPurchaseInvoiceLineTaxes(lines, calc.Lines)
+	if len(lineTaxes) > 0 {
+		if err := tx.Create(&lineTaxes).Error; err != nil {
+			return fmt.Errorf("create purchase invoice line taxes %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func (r *PurchaseInvoiceRepository) FindByID(companyID, id string) (*model.PurchaseInvoice, error) {

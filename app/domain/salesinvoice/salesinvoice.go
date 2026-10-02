@@ -65,6 +65,11 @@ type CreateDTO struct {
 // line, only used to point error messages at the right place. Kind is always "invoice".
 type ImportRow struct {
 	Row int `json:"row"`
+	// DefaultNotes — the file left Notes blank and the client filled in the Document Settings default:
+	// a new invoice gets it, an existing invoice the row updates keeps its own notes.
+	DefaultNotes bool `json:"default_notes"`
+	// DefaultTerms — same, for Terms & Conditions.
+	DefaultTerms bool `json:"default_terms"`
 	CreateDTO
 }
 
@@ -78,14 +83,20 @@ const MaxImportInvoices = 500
 
 // ImportItem — one validated invoice with its computed totals, ready to insert.
 type ImportItem struct {
+	// Row — the spreadsheet row of the invoice's first line, for error messages.
+	Row  int
 	DTO  *CreateDTO
 	Calc *utils.LinesCalc
+	// KeepNotes / KeepTerms — the file left these blank: an update keeps the invoice's own.
+	KeepNotes, KeepTerms bool
 }
 
-// ImportCreated — an invoice the import created.
+// ImportCreated — an invoice the import saved: created, or (Updated) an existing draft with the same
+// number that the file updated.
 type ImportCreated struct {
-	ID     string `json:"id"`
-	Number string `json:"number"`
+	ID      string `json:"id"`
+	Number  string `json:"number"`
+	Updated bool   `json:"updated"`
 }
 
 // UpdateDTO — a full replace: header fields + the complete new line set.
@@ -148,8 +159,11 @@ type Filter struct {
 
 type IRepository interface {
 	Create(dto *CreateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error)
-	// CreateMany saves every invoice in one transaction (the import).
-	CreateMany(items []ImportItem, actorID string) ([]ImportCreated, error)
+	// ImportMany saves every invoice of an import in one transaction: a number the company already
+	// has updates that (draft) invoice, any other number creates one.
+	ImportMany(items []ImportItem, actorID string, prior []string) ([]ImportCreated, error)
+	// ImportExistingNumbers — which of these numbers (lower-cased) the company already uses.
+	ImportExistingNumbers(companyID string, numbers []string) (map[string]bool, error)
 	Update(companyID, id string, dto *UpdateDTO, calc *utils.LinesCalc, actorID string) (*model.SalesInvoice, error)
 	FindByID(companyID, id string) (*model.SalesInvoice, error)
 	FindAll(f *Filter) (*utils.OffsetPaginationResult, error)

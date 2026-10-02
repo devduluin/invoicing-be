@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -46,43 +45,60 @@ func (s *PurchaseInvoiceService) Create(companyID, actorID string, dto *domain.C
 func (s *PurchaseInvoiceService) Import(companyID, actorID string, rows []domain.ImportRow) ([]domain.ImportCreated, error) {
 	items := make([]domain.ImportItem, 0, len(rows))
 	seen := make(map[string]int, len(rows))
+	var msgs []string
 	for i := range rows {
 		r := &rows[i]
 		dto := &r.CreateDTO
 		dto.CompanyID = companyID
 		dto.PurchaseOrderID, dto.ContactPersonID = nil, nil
 		dto.AttachmentData, dto.AttachmentName, dto.SignatureData = "", "", ""
-		rowErr := func(msg string) error {
-			return &domain.ErrValidation{Message: fmt.Sprintf("Row %d: %s", r.Row, msg)}
+		bad := false
+		rowErr := func(msg string) {
+			msgs = append(msgs, fmt.Sprintf("Row %d: %s", r.Row, msg))
+			bad = true
 		}
 		if n := strings.ToLower(strings.TrimSpace(dto.Number)); n != "" {
 			if first, dup := seen[n]; dup {
-				return nil, rowErr(fmt.Sprintf("invoice no. %s is also used on row %d", dto.Number, first))
+				rowErr(fmt.Sprintf("invoice no. %s is also used on row %d", dto.Number, first))
+			} else {
+				seen[n] = r.Row
 			}
-			seen[n] = r.Row
 		}
 		if err := s.checkMitra(companyID, dto.MitraID); err != nil {
-			return nil, rowErr(err.Error())
+			rowErr(err.Error())
 		}
 		calc, err := s.calc(companyID, dto.Lines, dto.AdditionalDiscountType, dto.AdditionalDiscountValue, dto.ShippingCost)
 		if err != nil {
-			return nil, rowErr(err.Error())
+			rowErr(err.Error())
 		}
-		items = append(items, domain.ImportItem{DTO: dto, Calc: calc})
+		if !bad {
+			items = append(items, domain.ImportItem{Row: r.Row, DTO: dto, Calc: calc, KeepNotes: r.DefaultNotes, KeepTerms: false})
+		}
 	}
-	if err := s.activation.CheckTransactionCapacity(companyID, len(items)); err != nil {
-		return nil, err
-	}
-	created, err := s.repo.CreateMany(items, actorID)
-	if err != nil {
-		var dup *domain.ErrNumberExists
-		if errors.As(err, &dup) {
-			for _, r := range rows {
-				if strings.EqualFold(strings.TrimSpace(r.Number), dup.Number) {
-					return nil, &domain.ErrValidation{Message: fmt.Sprintf("Row %d: %s", r.Row, dup.Error())}
-				}
+	if msgs == nil {
+		// only new invoices count against the monthly cap; a number the company already has is an update
+		numbers := make([]string, 0, len(items))
+		for _, it := range items {
+			numbers = append(numbers, it.DTO.Number)
+		}
+		existing, err := s.repo.ImportExistingNumbers(companyID, numbers)
+		if err != nil {
+			return nil, err
+		}
+		adding := 0
+		for _, it := range items {
+			if !existing[strings.ToLower(strings.TrimSpace(it.DTO.Number))] {
+				adding++
 			}
 		}
+		if err := s.activation.CheckTransactionCapacity(companyID, adding); err != nil {
+			return nil, err
+		}
+	}
+	// the clean rows are still saved (and rolled back) when the checks above found problems, so what
+	// only the data can tell (number in use, invalid contact / salesperson) comes back in the same answer
+	created, err := s.repo.ImportMany(items, actorID, msgs)
+	if err != nil {
 		return nil, err
 	}
 	s.activation.Recompute(companyID)
